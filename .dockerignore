@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# What must NOT be sent to the Docker daemon as build context.
+#
+# Two reasons: speed (web/android alone is 30 MB of Gradle output that the
+# server image never touches) and safety (server/.env holds the Supabase
+# password and JWT_SECRET — those belong in the host's environment panel, never
+# baked into an image layer).
+#
+# Note on syntax: a bare `node_modules` would only match the one at the root,
+# so every path pattern here is written with `**/` where it must match at any
+# depth. Anything the image genuinely needs is COPY-ed explicitly in the
+# Dockerfile, which is why this list can stay aggressive.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Installed and built inside the image, never copied in.
+**/node_modules
+**/dist
+**/build
+
+# Secrets.
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Baked into the APK at build time, not into the server image: it pins
+# VITE_API_BASE to the teacher's LAN address, which would make the hosted SPA
+# call 192.168.1.10 instead of its own origin.
+web/.env.production
+
+# Local SQLite database, its journals, and the nightly copies.
+**/*.db
+**/*.db-journal
+server/data
+server/backups
+
+# Android project + the built APK (30 MB of Gradle, irrelevant to the server).
+web/android
+web/resources
+StudentApp.apk
+**/*.apk
+**/*.aab
+**/*.keystore
+**/*.jks
+
+# History, CI and docs — none of it changes the running image, and including it
+# would bust the build cache on every documentation edit.
+.git
+.gitignore
+.github
+docs
+README.md
+db
+
+# Windows-only helpers.
+build-apk.ps1
+start.bat
+
+# Editor / OS noise.
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db
+**/*.log
+**/.tmp
+
+# The host reads these from the repository, not from the build context, so
+# excluding them keeps a deploy-config edit from busting the layer cache.
+# (The Dockerfile itself is deliberately NOT listed: some builders resolve it
+# through the context, and a missing Dockerfile is a hard failure.)
+render.yaml
+fly.toml

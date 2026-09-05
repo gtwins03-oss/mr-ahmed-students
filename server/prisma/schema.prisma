@@ -1,0 +1,275 @@
+// Student Management & Notification System — data model
+//
+// Provider is PostgreSQL (Supabase). `url` goes through the transaction pooler
+// on :6543 for the running app and `directUrl` through the session pooler on
+// :5432 for `db push` / `migrate`, which the transaction pooler cannot serve.
+// Both URLs live in server/.env and both must keep `connect_timeout=60`.
+//
+// Every model here is nevertheless provider-agnostic — status columns are
+// String with the allowed values documented inline (SQLite has no native
+// enums), no arrays, no Postgres-only types — so the local SQLite fallback is
+// still one command and no rewrite:
+//   npm run db:use-postgres   →  provider = "postgresql"   (the current setting)
+//   npm run db:use-sqlite     →  provider = "sqlite"
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooler:6543 — تشغيل التطبيق
+  directUrl = env("DIRECT_URL") // pooler:5432 — db push / migrate
+}
+
+// ─────────────────────────────── People ───────────────────────────────
+
+model Student {
+  id          String   @id @default(cuid())
+  name        String
+  parentName  String
+  parentPhone String // stored E.164, e.g. "+201001234567"
+  altPhone    String?
+  gradeLevel  String // e.g. "الصف الثالث الثانوي"
+  notes       String?
+  isActive    Boolean  @default(true) // soft delete: keeps history intact
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  enrollments Enrollment[]
+  attendance  Attendance[]
+  grades      Grade[]
+  messages    Message[]
+
+  @@index([isActive])
+  @@index([parentPhone])
+}
+
+// ─────────────────────────── Classes & schedule ───────────────────────
+
+model ClassGroup {
+  id         String   @id @default(cuid())
+  name       String   @unique // "مجموعة السبت - ٣ ثانوي"
+  subject    String // "الرياضيات"
+  gradeLevel String
+  color      String   @default("#2563eb") // UI chip colour
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  slots       ScheduleSlot[]
+  enrollments Enrollment[]
+  sessions    Session[]
+  assessments Assessment[]
+}
+
+/// One recurring weekly time slot for a class. A group meeting twice a week has two rows.
+model ScheduleSlot {
+  id           String  @id @default(cuid())
+  classGroupId String
+  weekday      Int // 0 = Sunday … 6 = Saturday
+  startTime    String // "16:00"  (local wall-clock, 24h)
+  endTime      String // "17:30"
+  location     String?
+
+  classGroup ClassGroup @relation(fields: [classGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([classGroupId, weekday, startTime])
+  @@index([weekday])
+}
+
+model Enrollment {
+  id           String   @id @default(cuid())
+  studentId    String
+  classGroupId String
+  joinedAt     DateTime @default(now())
+  isActive     Boolean  @default(true)
+
+  student    Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classGroup ClassGroup @relation(fields: [classGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, classGroupId])
+  @@index([classGroupId, isActive])
+}
+
+// ──────────────────────────── Attendance ──────────────────────────────
+
+/// A concrete dated occurrence of a class. Generated from ScheduleSlot by a
+/// daily cron (or on demand via POST /api/sessions/ensure).
+model Session {
+  id           String   @id @default(cuid())
+  classGroupId String
+  date         String // "2026-09-05" — local date, never a UTC timestamp
+  startTime    String
+  endTime      String?
+  topic        String?
+  status       String   @default("HELD") // PLANNED | HELD | CANCELLED
+  createdAt    DateTime @default(now())
+
+  classGroup ClassGroup   @relation(fields: [classGroupId], references: [id], onDelete: Cascade)
+  attendance Attendance[]
+
+  @@unique([classGroupId, date, startTime]) // makes session creation idempotent
+  @@index([date])
+}
+
+model Attendance {
+  id          String   @id @default(cuid())
+  sessionId   String
+  studentId   String
+  status      String // PRESENT | ABSENT | LATE | EXCUSED
+  minutesLate Int?
+  note        String?
+  markedAt    DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId]) // one mark per student per session
+  @@index([studentId, status])
+}
+
+// ────────────────────────── Grades & performance ──────────────────────
+
+model Assessment {
+  id           String   @id @default(cuid())
+  classGroupId String
+  title        String // "اختبار الوحدة الأولى"
+  type         String   @default("QUIZ") // QUIZ | EXAM | HOMEWORK
+  maxScore     Float
+  date         String // "2026-09-05"
+  weight       Float    @default(1) // for weighted averages later
+  createdAt    DateTime @default(now())
+
+  classGroup ClassGroup @relation(fields: [classGroupId], references: [id], onDelete: Cascade)
+  grades     Grade[]
+
+  @@index([classGroupId, date])
+}
+
+model Grade {
+  id           String   @id @default(cuid())
+  assessmentId String
+  studentId    String
+  score        Float? // null = did not sit the test (excluded from averages)
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([assessmentId, studentId])
+  @@index([studentId])
+}
+
+// ───────────────────────────── Messaging ──────────────────────────────
+
+model MessageTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique // ABSENCE | LATE | LOW_GRADE | MONTHLY_REPORT | CUSTOM
+  name      String // Arabic label shown in Settings
+  body      String // Arabic text containing {{placeholders}}
+  isActive  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+/// The outbox. EVERY parent notification lands here first, whatever the tier.
+model Message {
+  id            String    @id @default(cuid())
+  studentId     String?
+  toPhone       String // E.164 snapshot — survives the student being edited
+  channel       String    @default("WHATSAPP") // WHATSAPP | SMS
+  templateKey   String?
+  body          String // fully rendered Arabic text, frozen at enqueue time
+  status        String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED | CANCELLED
+  provider      String? // WA_LINK | GREEN_API | TWILIO
+  providerMsgId String?
+  error         String?
+  relatedType   String? // ATTENDANCE | GRADE | REPORT
+  relatedId     String?
+  /// Guarantees one alert per real-world event, e.g. "ABSENCE:{sessionId}:{studentId}".
+  /// Re-saving the attendance grid can never double-message a parent.
+  dedupeKey     String?   @unique
+  attempts      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  sentAt        DateTime?
+
+  student Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([studentId, createdAt])
+}
+
+// ───────────────────────────── Settings ───────────────────────────────
+
+/// Single-row table (id is always 1).
+model Setting {
+  id                 Int      @id @default(1)
+  tutorName          String   @default("الأستاذ أحمد")
+  centerName         String   @default("")
+  defaultCountryCode String   @default("+20") // used to normalise "01001234567"
+  lowGradeThreshold  Int      @default(60) // percent
+  autoSendAbsence    Boolean  @default(true)
+  autoSendLate       Boolean  @default(false)
+  autoSendLowGrade   Boolean  @default(true)
+  quietHoursStart    String   @default("22:00")
+  quietHoursEnd      String   @default("08:00")
+  provider           String   @default("WA_LINK") // WA_LINK | GREEN_API | TWILIO
+  providerConfig     String   @default("{}") // JSON blob of credentials
+
+  /// The teacher's OWN WhatsApp number — the sender, not a parent. E.164, e.g. "+201001234567".
+  tutorWhatsapp    String    @default("")
+  /// Last moment the sending account was confirmed linked (QR scanned / token verified).
+  whatsappLinkedAt DateTime?
+  /// Provider-agnostic link state, kept as a String like every other status column:
+  /// UNKNOWN | NOT_AUTHORIZED | QR_PENDING | AUTHORIZED | BLOCKED | ERROR
+  whatsappState    String    @default("UNKNOWN")
+
+  updatedAt DateTime @updatedAt
+}
+
+// ────────────────────── Users, roles & audit trail ────────────────────
+
+/// Login accounts. Two roles only:
+///   OWNER     — الأستاذ أحمد: everything, plus the audit log and user management.
+///   ASSISTANT — full access to all *data* (students, attendance, grades,
+///               messages, templates, settings) but never sees /api/audit
+///               or /api/users.
+/// Auth is a JWT Bearer token, not a cookie: the app also runs inside an
+/// Android WebView where cross-origin cookies are unreliable.
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  username     String    @unique
+  passwordHash String // bcryptjs, 10 rounds
+  role         String    @default("ASSISTANT") // OWNER | ASSISTANT
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  auditLogs AuditLog[]
+}
+
+/// Append-only trail of every meaningful action. Visible to the OWNER only.
+/// `userName` / `userRole` are snapshots so a deleted account still reads
+/// correctly years later.
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userName  String // snapshot, survives user deletion
+  userRole  String
+  action    String // LOGIN | CREATE | UPDATE | DELETE | ATTENDANCE | GRADES | MESSAGE | SETTINGS
+  entity    String // Student | ClassGroup | Session | Attendance | Assessment | Grade | Message | MessageTemplate | Setting | User
+  entityId  String?
+  summary   String // human-readable ARABIC sentence
+  before    String? // JSON snapshot
+  after     String? // JSON snapshot
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+}

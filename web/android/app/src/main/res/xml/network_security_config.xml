@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ⚠️ TEMPORARY — PLAIN HTTP IS ENABLED HERE FOR LAN TESTING ONLY.
+
+  The app talks to a Node server running on the teacher's own laptop, reached
+  over the local wifi at an address like http://192.168.1.10:4000 that is typed
+  into «إعداد الخادم». A laptop on a home network has no TLS certificate, so
+  without cleartext permission Android 9+ refuses every request and the app
+  looks broken with no error the teacher can act on.
+
+  WHY THE PRIVATE RANGES ARE NOT LISTED INDIVIDUALLY
+  Android's <domain> element matches a literal hostname (optionally as a suffix
+  via includeSubdomains). It has NO CIDR / wildcard syntax, so "10.*",
+  "192.168.*" and "172.16-31.*" simply cannot be written down: an IPv4 network
+  is a *prefix* of the address while includeSubdomains matches a *suffix*, and
+  enumerating the ranges means millions of entries. Any short list would also
+  be wrong in practice — DHCP hands out unpredictable hosts, an Android hotspot
+  uses 192.168.43.x and an iPhone hotspot 172.20.10.x.
+
+  So cleartext is permitted by default and then DENIED for named hosts below.
+  A bare IPv4 address contains no letters and therefore matches none of those
+  suffixes, which lands the rule where it is actually wanted:
+      http://192.168.1.10:4000   → allowed  (the teacher's laptop)
+      http://10.0.0.7:4000       → allowed  (another LAN layout)
+      http://localhost:4000      → allowed  (emulator / same device)
+      http://anything.com        → BLOCKED  (mistyped or hostile public host)
+  It is a guard-rail, not a wall: a public server addressed by raw IP would
+  still be reachable over HTTP. That is an accepted trade-off while the system
+  is LAN-only, and it disappears entirely at the next step.
+
+  ONCE THE SERVER IS ON HTTPS — do all four together:
+    1. replace this whole file with the production block quoted at the bottom
+    2. set  server.cleartext = false   in web/capacitor.config.ts
+    3. remove  android.allowMixedContent  from the same file
+    4. rebuild:  npm run apk
+-->
+<network-security-config>
+
+    <!-- Default for every host: plain HTTP allowed, system CAs trusted.
+         Narrowed immediately by the domain-config that follows. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Named hosts on the public internet must use HTTPS. These are suffix
+         matches, so "com" covers "example.com", "cdn.example.com" and so on.
+         The list is the common TLD set — it does not need to be exhaustive,
+         because nothing in this app is supposed to reach a public host over
+         HTTP in the first place. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">com</domain>
+        <domain includeSubdomains="true">net</domain>
+        <domain includeSubdomains="true">org</domain>
+        <domain includeSubdomains="true">edu</domain>
+        <domain includeSubdomains="true">gov</domain>
+        <domain includeSubdomains="true">info</domain>
+        <domain includeSubdomains="true">biz</domain>
+        <domain includeSubdomains="true">io</domain>
+        <domain includeSubdomains="true">co</domain>
+        <domain includeSubdomains="true">app</domain>
+        <domain includeSubdomains="true">dev</domain>
+        <domain includeSubdomains="true">me</domain>
+        <domain includeSubdomains="true">xyz</domain>
+        <domain includeSubdomains="true">online</domain>
+        <domain includeSubdomains="true">site</domain>
+        <domain includeSubdomains="true">cloud</domain>
+        <domain includeSubdomains="true">eg</domain>
+        <domain includeSubdomains="true">sa</domain>
+        <domain includeSubdomains="true">ae</domain>
+    </domain-config>
+
+    <!-- Loopback and the emulator's alias for the host machine. Listed
+         explicitly so they keep working even if the block above is ever
+         tightened into a default-deny base-config. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- android emulator → host machine -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- genymotion → host machine -->
+        <domain includeSubdomains="false">10.0.3.2</domain>
+    </domain-config>
+
+    <!--
+      PRODUCTION REPLACEMENT — paste this over everything above once the server
+      is reachable over HTTPS, then do steps 2–4 from the header comment:
+
+        <network-security-config>
+            <base-config cleartextTrafficPermitted="false">
+                <trust-anchors>
+                    <certificates src="system" />
+                </trust-anchors>
+            </base-config>
+        </network-security-config>
+    -->
+
+</network-security-config>

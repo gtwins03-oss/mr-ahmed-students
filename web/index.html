@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="description" content="نظام إدارة الطلاب والحضور والدرجات وتنبيهات أولياء الأمور" />
+    <title>نظام إدارة الطلاب</title>
+
+    <!-- Arabic UI font. If Google Fonts is unreachable (offline / blocked),
+         the stack below falls back to the system Arabic font and the app
+         still renders correctly. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap"
+    />
+
+    <style>
+      :root {
+        --font-arabic: "Cairo", "Segoe UI", "Tahoma", "Noto Sans Arabic",
+          "Dubai", system-ui, -apple-system, sans-serif;
+      }
+      html,
+      body {
+        font-family: var(--font-arabic);
+        -webkit-font-smoothing: antialiased;
+      }
+      /* Pre-hydration paint so the first frame is not a white flash. */
+      body {
+        margin: 0;
+        background-color: #f8fafc;
+        color: #0f172a;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

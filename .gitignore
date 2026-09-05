@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+server/data/
+server/backups/
+*.db
+*.db-journal
+
+# Android build output. `npm run apk` regenerates it, and a 4 MB binary in Git
+# history is not worth it. Note that `.env` above does NOT cover
+# web/.env.production — that file is committed on purpose.
+StudentApp.apk
+
+# Everything else Android-related is handled by web/android/.gitignore, which
+# Capacitor generated: build dirs, local.properties, and the copied web assets.

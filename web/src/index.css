@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* Tailwind v4 is configured entirely from CSS — there is no tailwind.config.js
+   and no postcss.config.js in this project; the @tailwindcss/vite plugin does
+   the rest. Overriding --font-sans here changes the default font everywhere,
+   including Preflight's base rule. */
+@theme {
+  --font-sans:
+    "Cairo", "Segoe UI", Tahoma, "Noto Sans Arabic", "Dubai", system-ui,
+    -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-arabic: var(--font-sans);
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-slate-50);
+    color: var(--color-slate-900);
+    -webkit-font-smoothing: antialiased;
+    /* Arabic-Indic digits line up in columns — attendance counters, score
+       grids and money-like figures stop jittering as values change. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Consistent, visible keyboard focus without the default browser outline. */
+  :focus-visible {
+    outline: 2px solid var(--color-blue-500);
+    outline-offset: 2px;
+  }
+
+  /* The score-entry grid is all number inputs; spinners just get in the way
+     and steal horizontal space from the value. */
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}

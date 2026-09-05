@@ -1,0 +1,74 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# Fly.io — نفس فكرة render.yaml بالظبط، بس على Fly.
+#
+# الفرق العملي الوحيد: هنا الجهاز بيفضل صاحي طول الوقت (auto_stop_machines = off)
+# فمفيش انتظار ٣٠–٦٠ ثانية أول ما تفتح التطبيق، والمهام المجدولة (حصص اليوم ٦ ص،
+# تفريغ قائمة الإرسال كل دقيقتين، النسخ الاحتياطي ٢:٣٠ ص) بتشتغل في وقتها بالظبط.
+#
+# مقابل ده إن Fly مش مجاني بالكامل: جهاز shared-cpu-1x بـ 512MB شغّال ٢٤ ساعة
+# بيتكلّف حوالي ٣ دولار في الشهر. يعني: Render = ببلاش بس بينام، Fly = صاحي بفلوس.
+# اختار واحد بس — الاتنين بيقروا نفس الـ Dockerfile ونفس قاعدة بيانات Supabase.
+#
+# ── الأوامر الثلاثة، بالترتيب، من جذر المشروع ────────────────────────────────
+#
+#   1) fly launch --no-deploy
+#      بينشئ التطبيق على حسابك من غير ما ينشر. لو سألك «Would you like to tweak
+#      these settings…?» اختار **No** عشان ما يستبدلش الملف ده.
+#
+#   2) fly secrets set DATABASE_URL="…" DIRECT_URL="…" JWT_SECRET="…" `
+#                      OWNER_USERNAME="…" OWNER_PASSWORD="…" `
+#                      CORS_ORIGINS="https://mr-ahmed.fly.dev"
+#      نفس قيم server/.env بالظبط (بما فيها connect_timeout=60 في آخر الرابطين —
+#      من غيره الاتصال بـ Supabase بيفشل على الشبكة دي). حط الرابط جوّه علامتَي
+#      تنصيص دايماً لأنه فيه `:` و `@` و `?`.
+#      وللـ JWT_SECRET ولّد نصاً عشوائياً طويلاً:
+#        -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 48 | % {[char]$_})
+#
+#   3) fly deploy
+#      بيبني Dockerfile وينشره. بعد ما يخلص:
+#        fly open /api/health     ←  لازم يرد {"ok":true}
+#        fly logs                 ←  لمتابعة الخادم
+#
+# 📱 وبعد أول نشر ناجح، اربط تطبيق الأندرويد بالعنوان الجديد:
+#      node scripts/set-api-base.mjs https://mr-ahmed.fly.dev
+#      npm run apk
+# ═════════════════════════════════════════════════════════════════════════════
+
+# أسماء تطبيقات Fly مشتركة بين كل المستخدمين؛ لو الاسم محجوز غيّره هنا (والعنوان
+# الناتج بيبقى https://<الاسم>.fly.dev).
+app = 'mr-ahmed'
+primary_region = 'fra' # فرانكفورت — أقرب منطقة لمصر
+
+[build]
+  dockerfile = 'Dockerfile'
+
+# متغيّرات غير سرّية بس. أي قيمة فيها كلمة مرور أو مفتاح تروح في `fly secrets set`
+# ومتتكتبش هنا أبداً — الملف ده بيتحفظ في Git.
+[env]
+  PORT = '4000'
+  # نفس القيمة المضبوطة في الصورة؛ مكتوبة هنا كمان عشان تكون ظاهرة وقابلة للتغيير.
+  TZ = 'Africa/Cairo'
+
+[http_service]
+  internal_port = 4000 # نفس المنفذ في EXPOSE و PORT
+  # تطبيق الأندرويد بيرفض الاتصال بعنوان عام على http عادي، فالتحويل الإجباري
+  # لـ https مش رفاهية.
+  force_https = true
+  # 'off' = الجهاز ما بينامش، يعني مفيش تأخير في أول طلب والمهام المجدولة
+  # مضمونة. (النسخ القديمة كانت بتكتبها auto_stop_machines = false.)
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [[http_service.checks]]
+    method = 'GET'
+    path = '/api/health' # عام ومش محتاج تسجيل دخول
+    interval = '30s'
+    timeout = '5s'
+    # مهلة البداية: الحاوية بتشغّل `prisma db push` قبل الخادم.
+    grace_period = '45s'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb' # كفاية لعملية Node واحدة + عميل Prisma

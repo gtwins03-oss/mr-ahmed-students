@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The lower layer of the adaptive icon (Android 8+).
+
+  @capacitor/assets writes #FFFFFF here by default, which is wrong for this
+  icon: the foreground layer is a blue rounded square inset to the 66% safe
+  zone, so a white background shows as a pale ring around it under the
+  launcher's circle / squircle mask. Painting the background the same blue
+  makes the whole tile one solid colour whatever mask the device applies.
+
+  Re-running `npm run assets:gen` resets this file and mipmap-anydpi-v26/
+  ic_launcher*.xml back to the white default — reapply both together.
+-->
+<resources>
+    <color name="ic_launcher_background">#2563EB</color>
+</resources>

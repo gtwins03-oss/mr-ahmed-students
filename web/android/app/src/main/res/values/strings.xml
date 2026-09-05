@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  The launcher label and the title bar. Arabic on purpose: this is what shows
+  under the icon on the teacher's home screen and in the app switcher.
+
+  `app_name` and `title_activity_main` are seeded from `appName` in
+  web/capacitor.config.ts when the platform is first added, so change the name
+  in BOTH places or a future `npx cap add android` will quietly disagree with
+  this file. `package_name` / `custom_url_scheme` mirror `appId` and must stay
+  in sync with the applicationId in app/build.gradle.
+-->
+<resources>
+    <string name="app_name">إدارة الطلاب</string>
+    <string name="title_activity_main">إدارة الطلاب</string>
+    <string name="package_name">com.mrahmed.students</string>
+    <string name="custom_url_scheme">com.mrahmed.students</string>
+</resources>

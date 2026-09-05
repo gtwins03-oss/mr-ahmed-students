@@ -1,0 +1,20 @@
+{
+  "name": "mr-ahmed",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Student Management & Notification System — نظام إدارة الطلاب والتنبيهات",
+  "scripts": {
+    "setup": "npm install --prefix server && npm install --prefix web && npm run db:reset",
+    "db:reset": "npm run --prefix server db:push && npm run --prefix server db:seed",
+    "dev": "concurrently -n \"API,WEB\" -c \"blue,magenta\" \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run --prefix server dev",
+    "dev:web": "npm run --prefix web dev",
+    "build": "npm run --prefix web build && npm run --prefix server build",
+    "start": "npm run --prefix server start",
+    "apk": "powershell -ExecutionPolicy Bypass -File build-apk.ps1",
+    "set-server": "node scripts/set-api-base.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

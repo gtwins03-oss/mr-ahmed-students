@@ -1,0 +1,101 @@
+# Builds StudentApp.apk in the cloud.
+#
+# This is the escape hatch for "I do not have 8 GB of Android SDK on this
+# laptop". Locally the same APK comes out of `npm run apk` (build-apk.ps1);
+# here GitHub installs JDK 17 and the Android SDK from scratch on every run and
+# hands back the APK as a downloadable artifact. Push a commit, open the run in
+# the Actions tab, download **StudentApp-debug-apk** from the Artifacts box.
+#
+# Kept deliberately identical to the local script: same Capacitor 6, same
+# JDK 17, same compileSdk 34, same `assembleDebug`. If one of them starts
+# failing, the other is the control group.
+#
+# The output is a *debug* build signed with Android's throwaway debug key.
+# It installs on any phone that allows unknown sources, and it is not
+# publishable to Google Play — that needs a release build with a real keystore,
+# which is intentionally out of scope while distribution is "send the file".
+
+name: build-apk
+
+on:
+  # Every push that can change what ends up inside the APK.
+  push:
+    branches: [main, master]
+    paths:
+      - "web/**"
+      - ".github/workflows/build-apk.yml"
+  pull_request:
+    paths:
+      - "web/**"
+  # ...and on demand, from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Debug APK (ubuntu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 24 matches what the project is developed against; `npm ci` needs
+      # web/package-lock.json to be committed, which it is.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # JDK 17, not 21: Capacitor 6 + AGP 8.2 target Java 17, and a newer JDK
+      # fails with "Unsupported class file major version".
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-34 build-tools;34.0.0 platform-tools"
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      # Uses web/.env.production, i.e. VITE_API_BASE is empty and the APK asks
+      # for the server address on the «إعداد الخادم» screen.
+      - name: Build web bundle
+        working-directory: web
+        run: npm run build
+
+      # Copies dist/ into android/app/src/main/assets/public and refreshes the
+      # plugin list. Does NOT touch AndroidManifest.xml, so the <queries> block
+      # and the network security config survive.
+      - name: Sync Capacitor
+        working-directory: web
+        run: npx cap sync android
+
+      - name: Gradle assembleDebug
+        working-directory: web/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # Same filename the local build produces, so instructions match wherever
+      # the APK came from.
+      - name: Rename to StudentApp.apk
+        run: cp web/android/app/build/outputs/apk/debug/app-debug.apk StudentApp.apk
+
+      - name: Report size
+        run: ls -lh StudentApp.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StudentApp-debug-apk
+          path: StudentApp.apk
+          if-no-files-found: error
+          retention-days: 30
