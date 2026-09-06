@@ -206,21 +206,40 @@ Write-Host ("  الملف : {0}" -f $ApkTarget) -ForegroundColor White
 Write-Host ("  الحجم : {0} ميجابايت" -f $SizeMb) -ForegroundColor White
 Write-Host '─────────────────────────────────────────────' -ForegroundColor Green
 
-# عنوان الخادم هو أكثر ما يتعثّر فيه المعلّم بعد التثبيت، فنطبع عناوين هذا
-# الجهاز على الشبكة المحلية ليكتب أحدها في شاشة «إعداد الخادم».
+# عنوان الخادم هو أكثر ما يتعثّر فيه المعلّم بعد التثبيت. إن كان VITE_API_BASE
+# مضبوطاً فالعنوان مدمج داخل الحزمة ولا يُسأل عنه أحد — نطبعه للتأكيد فقط.
+# وإن كان فارغاً فالتطبيق سيسأل عنه عند أول تشغيل، فنطبع عناوين هذا الجهاز على
+# الشبكة المحلية ليكتب المعلّم أحدها.
 try {
-    $addresses = @(
-        Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown' } |
-            Select-Object -ExpandProperty IPAddress
-    )
-    if ($addresses.Count -gt 0) {
-        Write-Host ''
-        Write-Host '  بعد تثبيت التطبيق، اكتب أحد هذه العناوين في «إعداد الخادم»:' -ForegroundColor Yellow
-        foreach ($ip in $addresses) {
-            Write-Host ("    http://{0}:4000" -f $ip) -ForegroundColor White
+    $BakedBase = ''
+    $EnvProd = Join-Path $PSScriptRoot 'web\.env.production'
+    if (Test-Path -LiteralPath $EnvProd) {
+        $Match = [regex]::Match(
+            [System.IO.File]::ReadAllText($EnvProd),
+            '(?m)^\s*VITE_API_BASE\s*=\s*"?([^"\r\n]*)"?\s*$'
+        )
+        if ($Match.Success) { $BakedBase = $Match.Groups[1].Value.Trim() }
+    }
+
+    Write-Host ''
+    if ($BakedBase -ne '') {
+        Write-Host '  عنوان الخادم مدمج داخل التطبيق — لن يسأل عنه عند أول تشغيل:' -ForegroundColor Yellow
+        Write-Host ("    {0}" -f $BakedBase) -ForegroundColor White
+        Write-Host '  (يمكن تغييره لاحقاً من شاشة «إعداد الخادم» دون بناء حزمة جديدة)' -ForegroundColor DarkGray
+    }
+    else {
+        $addresses = @(
+            Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown' } |
+                Select-Object -ExpandProperty IPAddress
+        )
+        if ($addresses.Count -gt 0) {
+            Write-Host '  بعد تثبيت التطبيق، اكتب أحد هذه العناوين في «إعداد الخادم»:' -ForegroundColor Yellow
+            foreach ($ip in $addresses) {
+                Write-Host ("    http://{0}:4000" -f $ip) -ForegroundColor White
+            }
+            Write-Host '  (شرط أن يكون الخادم يعمل بـ npm start وأن يكون الهاتف على نفس الشبكة)' -ForegroundColor DarkGray
         }
-        Write-Host '  (شرط أن يكون الخادم يعمل بـ npm start وأن يكون الهاتف على نفس الشبكة)' -ForegroundColor DarkGray
     }
 }
 catch {
