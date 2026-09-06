@@ -11,7 +11,13 @@
  * of `toISOString()`, which would roll over a day early east of UTC.
  */
 
-import type { AttendanceStatus, AssessmentType, MessageStatus, SessionStatus } from "../api/types";
+import type {
+  AttendanceStatus,
+  AssessmentType,
+  MessageStatus,
+  SessionStatus,
+  TemplateKey,
+} from "../api/types";
 
 /**
  * The placeholder every formatter falls back to. Nothing in this module may
@@ -209,6 +215,22 @@ export const MESSAGE_STATUS_TONE: Record<
   FAILED: "red",
   SKIPPED: "gray",
   CANCELLED: "gray",
+};
+
+/**
+ * What a message *is*, in Arabic — never a bare template key.
+ *
+ * Lives here rather than in the send queue because three screens now name a
+ * message: the queue itself, and the two save confirmations that report a
+ * withdrawn or already-sent alert («تنبيه الغياب لـ "أحمد" كان قد أُرسل»).
+ * One map keeps the wording identical across all three.
+ */
+export const TEMPLATE_LABEL_AR: Record<TemplateKey, string> = {
+  ABSENCE: "تنبيه غياب",
+  LATE: "تنبيه تأخير",
+  LOW_GRADE: "تنبيه مستوى",
+  MONTHLY_REPORT: "التقرير الشهري",
+  CUSTOM: "رسالة مخصّصة",
 };
 
 export const SESSION_STATUS_AR: Record<SessionStatus, string> = {

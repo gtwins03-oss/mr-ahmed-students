@@ -46,3 +46,20 @@ export const toChatId = (e164: string): string => `${String(e164 ?? "").replace(
 /** Tier 0 click-to-chat link. Note: no "+" in the path, body is percent-encoded. */
 export const toWaLink = (e164: string, body: string): string =>
   `https://wa.me/${String(e164 ?? "").replace(/\D/g, "")}?text=${encodeURIComponent(String(body ?? ""))}`;
+
+/**
+ * The `whatsapp://` twin of `toWaLink()` — same digits, same percent-encoded
+ * body, different scheme. `toWaLink()` stays the canonical link (the browser
+ * path and «إرسال الكل» both depend on it); this one exists purely so the
+ * Android shell has a URL that Android will route to the WhatsApp *app*.
+ *
+ * A WebView loads an https link itself, so inside the APK a wa.me URL only ever
+ * reaches WhatsApp's web landing page. Only a non-http scheme is handed to the
+ * OS as an Intent — see web/src/lib/openExternal.ts. Every response that
+ * carries a `waLink` must therefore carry this one beside it, or that screen's
+ * «فتح واتساب» button is dead in the APK.
+ */
+export const toWaAppLink = (e164: string, body: string): string =>
+  `whatsapp://send?phone=${String(e164 ?? "").replace(/\D/g, "")}&text=${encodeURIComponent(
+    String(body ?? ""),
+  )}`;

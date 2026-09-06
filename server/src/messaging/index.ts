@@ -8,7 +8,7 @@
 import { z } from "zod";
 import type { Setting } from "@prisma/client";
 
-import { isValidE164, toE164, toWaLink } from "../lib/phone";
+import { isValidE164, toE164, toWaAppLink, toWaLink } from "../lib/phone";
 import type { MessagingProvider, ProviderName } from "./provider";
 import { waLinkProvider } from "./wa-link";
 import { greenApiProvider } from "./green-api";
@@ -108,6 +108,13 @@ export type TestProviderResult = {
   body: string;
   /** Tier 0 only: the click-to-chat link the UI should open. */
   waLink?: string;
+  /**
+   * The same chat as `whatsapp://send?phone=…&text=…`. Ships beside `waLink`
+   * for the same reason the outbox rows do: inside the APK an https link is
+   * loaded by the WebView itself and never reaches the WhatsApp app, so
+   * «اختبار الإرسال» → «فتح واتساب» would be a dead button without it.
+   */
+  waAppLink?: string;
   providerMessageId?: string;
   /** Raw provider error, for the Settings screen's diagnostics line. */
   error?: string;
@@ -165,6 +172,7 @@ export async function testProvider(
       ...base,
       ok: true,
       waLink: toWaLink(phone, body),
+      waAppLink: toWaAppLink(phone, body),
       message: "المزوّد الحالي يدوي — اضغط لفتح واتساب وإرسال الرسالة التجريبية",
     };
   }

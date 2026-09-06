@@ -5,6 +5,11 @@
  * The grid saves as a single unit, and every alert carries a `dedupeKey`, so
  * re-saving the same marks ten times still messages each parent exactly once.
  *
+ * A correction is the other half of that promise: changing a mark away from
+ * ABSENT / LATE *withdraws* the alert it raised (`cancelPending`), so fixing the
+ * wrong student can never leave a message in the queue that says they were
+ * missing from a class they attended.
+ *
  * The audit trail follows the same rule: the previous marks are read *before*
  * the upsert, and only students whose mark actually moved get a line. Saving an
  * unchanged grid writes no history at all.
@@ -14,7 +19,7 @@ import type { Request } from "express";
 import { prisma } from "../db";
 import { arNum } from "../lib/arabic";
 import { badRequest, notFound } from "../lib/validate";
-import { enqueueMessage } from "../messaging/outbox";
+import { cancelPending, enqueueMessage, type SentAlready } from "../messaging/outbox";
 import { arDate, arTime } from "../messaging/template";
 import { emitChange } from "../realtime";
 import { logAudit } from "./audit.service";
@@ -28,7 +33,17 @@ export type Mark = {
   note?: string | null;
 };
 
-export type SaveAttendanceResult = { saved: number; queued: number };
+export type SaveAttendanceResult = {
+  saved: number;
+  queued: number;
+  /** Queued alerts withdrawn because the mark that raised them was corrected. */
+  cancelled: number;
+  /** Alerts that had already gone out — a correction cannot unsend them. */
+  sentAlready: SentAlready[];
+};
+
+/** The two marks that raise an alert, and therefore the two that can leave one behind. */
+const ALERTING: readonly ["ABSENT", "LATE"] = ["ABSENT", "LATE"];
 
 const STATUS_AR: Record<AttendanceStatus, string> = {
   PRESENT: "حاضر",
@@ -59,7 +74,7 @@ export async function saveAttendance(
   ]);
   if (!session) throw notFound("الحصة غير موجودة");
 
-  if (list.length === 0) return { saved: 0, queued: 0 };
+  if (list.length === 0) return { saved: 0, queued: 0, cancelled: 0, sentAlready: [] };
 
   const studentIds = list.map((m) => m.studentId);
 
@@ -149,7 +164,63 @@ export async function saveAttendance(
 
   if (changed > 0) emitChange("Attendance");
 
-  // 3. Queue alerts. dedupeKey makes re-saving the grid harmless.
+  // 3. Withdraw the alerts these corrections just invalidated.
+  //
+  //    Marking a student ABSENT queues an ABSENCE message the moment the grid
+  //    is saved. Realising it was the wrong student and switching them to
+  //    PRESENT has to take that message back: left in the queue, the teacher's
+  //    thumb tells a parent their child missed a class they attended.
+  //
+  //    Only a status that actually *moved* withdraws anything — `previous` was
+  //    read before the transaction precisely so re-saving an unchanged grid
+  //    cannot disturb a queue the teacher is halfway through sending. A student
+  //    with no previous row has nothing to withdraw either: every ABSENT/LATE
+  //    dedupeKey in this session was created from a mark that is in that map.
+  const stale: { studentId: string; mark: (typeof ALERTING)[number]; dedupeKey: string }[] = [];
+
+  for (const m of list) {
+    const prev = previous.get(m.studentId);
+    if (!prev || prev.status === m.status) continue;
+
+    for (const mark of ALERTING) {
+      if (m.status === mark) continue; // the grid still says this — keep it queued
+      stale.push({ studentId: m.studentId, mark, dedupeKey: `${mark}:${sessionId}:${m.studentId}` });
+    }
+  }
+
+  let cancelled = 0;
+  const sentAlready: SentAlready[] = [];
+
+  if (stale.length > 0) {
+    // One query answers "were these ever queued, and where are they now?".
+    // `cancelPending()` alone cannot tell «لا يوجد ما يُلغى» apart from «فات
+    // الأوان», and the second is the case the teacher has to hear about.
+    const rows = await prisma.message.findMany({
+      where: { dedupeKey: { in: stale.map((s) => s.dedupeKey) } },
+      select: { dedupeKey: true, status: true },
+    });
+    const statusOf = new Map<string, string>();
+    for (const row of rows) if (row.dedupeKey) statusOf.set(row.dedupeKey, row.status);
+
+    for (const s of stale) {
+      const status = statusOf.get(s.dedupeKey);
+
+      if (status === "PENDING") {
+        const row = await cancelPending(s.dedupeKey, "بعد تعديل الحضور", req);
+        if (row) cancelled += 1;
+      } else if (status === "SENT") {
+        // Impossible to withdraw — the parent already has it. Say so out loud
+        // rather than letting the correction look complete.
+        sentAlready.push({
+          studentId: s.studentId,
+          studentName: nameOf.get(s.studentId) ?? "طالب",
+          templateKey: s.mark === "ABSENT" ? "ABSENCE" : "LATE",
+        });
+      }
+    }
+  }
+
+  // 4. Queue alerts. dedupeKey makes re-saving the grid harmless.
   let queued = 0;
   for (const m of list) {
     const wantsAlert =
@@ -178,5 +249,5 @@ export async function saveAttendance(
 
   if (queued > 0) emitChange("Message");
 
-  return { saved: list.length, queued };
+  return { saved: list.length, queued, cancelled, sentAlready };
 }

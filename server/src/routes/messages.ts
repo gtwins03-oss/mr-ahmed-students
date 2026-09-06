@@ -5,6 +5,11 @@
  * taps it, WhatsApp opens with the Arabic text already typed, and the UI then
  * calls /mark-sent. On Tier 1/2 the same rows are drained automatically.
  *
+ * The same chat also ships as `waAppLink`, the `whatsapp://` form of the very
+ * same number and body. A WebView loads an https link *itself*; only a non-http
+ * scheme is handed to Android as an Intent, so the APK needs that second field
+ * to reach the installed WhatsApp app at all (see web/src/lib/openExternal.ts).
+ *
  * Rendering and dispatch belong to the messaging layer — these handlers only
  * validate, delegate, and shape the response.
  */
@@ -13,7 +18,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { prisma } from "../db";
-import { toWaLink } from "../lib/phone";
+import { toWaAppLink, toWaLink } from "../lib/phone";
 import { badRequest, notFound, parseBody, queryString, zId } from "../lib/validate";
 import { resolveProvider } from "../messaging";
 import { renderPreview, sendMessageNow } from "../messaging/outbox";
@@ -57,6 +62,7 @@ function toMessageDto(m: MessageRow) {
     createdAt: m.createdAt,
     sentAt: m.sentAt,
     waLink: toWaLink(m.toPhone, m.body),
+    waAppLink: toWaAppLink(m.toPhone, m.body),
   };
 }
 

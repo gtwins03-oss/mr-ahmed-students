@@ -47,6 +47,7 @@ import {
   arTime,
   todayISO,
 } from "../lib/format";
+import { openWhatsapp } from "../lib/openExternal";
 
 type ClassChipData = { id: string; name: string; color?: string };
 
@@ -178,8 +179,20 @@ function monthStartISO(): string {
   return `${todayISO().slice(0, 7)}-01`;
 }
 
+/**
+ * The monthly report is previewed and sent straight from this page, so the two
+ * link forms are built here rather than coming off the wire with a message row.
+ * Both are needed: `waLink` is the browser path, `waAppLink` is the only form
+ * that reaches the WhatsApp app inside the APK — see lib/openExternal.ts.
+ */
 function waLink(phone: string, body: string): string {
   return `https://wa.me/${(phone ?? "").replace(/\D/g, "")}?text=${encodeURIComponent(body)}`;
+}
+
+function waAppLink(phone: string, body: string): string {
+  return `whatsapp://send?phone=${(phone ?? "").replace(/\D/g, "")}&text=${encodeURIComponent(
+    body,
+  )}`;
 }
 
 /** Sends `null` for a cleared value, omits the key for one that was never set. */
@@ -798,7 +811,10 @@ export function StudentDetail() {
               disabled={!data || !previewBody}
               onClick={() => {
                 if (!data || !previewBody) return;
-                window.open(waLink(data.parentPhone, previewBody), "_blank");
+                void openWhatsapp({
+                  appLink: waAppLink(data.parentPhone, previewBody),
+                  webLink: waLink(data.parentPhone, previewBody),
+                });
               }}
             >
               فتح واتساب

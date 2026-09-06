@@ -36,6 +36,7 @@ import {
   cn,
 } from "../components/ui";
 import { arDate, arMonth, arNum, arTime, currentMonthISO, todayISO } from "../lib/format";
+import { openWhatsapp } from "../lib/openExternal";
 import { useTheme, type Theme } from "../lib/theme";
 
 /* ──────────────────────────────── shapes ──────────────────────────────── */
@@ -77,6 +78,8 @@ type TestResult = {
   toPhone: string;
   body: string;
   waLink?: string;
+  /** The `whatsapp://` twin — the only form that reaches the app in the APK. */
+  waAppLink?: string;
   error?: string;
   message: string;
 };
@@ -945,10 +948,19 @@ export function Settings() {
                     {testResult.error ? ` (${testResult.error})` : ""}
                   </span>
                   {testResult.waLink ? (
+                    /* Through openWhatsapp, not window.open: this is the first
+                       «فتح واتساب» a teacher ever presses, and in the APK a
+                       wa.me URL is loaded by the WebView itself and never
+                       reaches WhatsApp. See lib/openExternal.ts. */
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() => window.open(testResult.waLink, "_blank")}
+                      onClick={() =>
+                        void openWhatsapp({
+                          appLink: testResult.waAppLink ?? "",
+                          webLink: testResult.waLink ?? "",
+                        })
+                      }
                     >
                       فتح واتساب
                     </Button>

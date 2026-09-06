@@ -27,6 +27,7 @@ import type {
   EnsureSessionsResult,
   RosterEntry,
   SaveResult,
+  SentAlreadyNotice,
   SessionWithRoster,
 } from "../api/types";
 import {
@@ -39,7 +40,15 @@ import {
   Spinner,
   cn,
 } from "../components/ui";
-import { STATUS_AR, addDaysISO, arDate, arNum, arTime, todayISO } from "../lib/format";
+import {
+  STATUS_AR,
+  TEMPLATE_LABEL_AR,
+  addDaysISO,
+  arDate,
+  arNum,
+  arTime,
+  todayISO,
+} from "../lib/format";
 
 /* ─────────────────────────── status buttons ───────────────────────────── */
 
@@ -109,6 +118,23 @@ function tally(roster: RosterEntry[]) {
   };
 }
 
+/**
+ * What a save did to the outbox, in Arabic — one clause per thing that actually
+ * happened.
+ *
+ * Correcting a wrong mark *withdraws* the alert it raised, and the withdrawal
+ * has to be said out loud: a message that silently disappears from the queue
+ * reads as a bug, and the old wording («تم إضافة ٠ رسالة») claimed an addition
+ * that never happened. Returns "" when the outbox was untouched, which is the
+ * signal not to draw the strip at all.
+ */
+function outboxSummaryAr(queued: number, cancelled: number): string {
+  const clauses: string[] = [];
+  if (queued > 0) clauses.push(`تم إضافة ${arNum(queued)} رسالة إلى قائمة الإرسال`);
+  if (cancelled > 0) clauses.push(`أُلغيت ${arNum(cancelled)} رسالة تنبيه بعد تعديل الحضور`);
+  return clauses.join(" · ");
+}
+
 /** The one error shape this page shows — a tinted block, never bare text. */
 function ErrorNote({ children }: { children: ReactNode }) {
   return (
@@ -127,7 +153,14 @@ export function Attendance() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [date, setDate] = useState<string>(todayISO());
-  const [notice, setNotice] = useState<{ sessionId: string; queued: number } | null>(null);
+  const [notice, setNotice] = useState<{
+    sessionId: string;
+    queued: number;
+    /** Alerts withdrawn because the mark that raised them was corrected. */
+    cancelled: number;
+    /** Alerts that had already gone out — a correction cannot unsend them. */
+    sentAlready: SentAlreadyNotice[];
+  } | null>(null);
 
   const sessionsKey = useMemo(() => ["sessions", date] as const, [date]);
 
@@ -182,9 +215,17 @@ export function Attendance() {
       if (context?.previous) queryClient.setQueryData(sessionsKey, context.previous);
     },
     onSuccess: (result, vars) => {
-      if (result && result.queued > 0) {
-        setNotice({ sessionId: vars.sessionId, queued: result.queued });
-      }
+      const queued = result?.queued ?? 0;
+      const cancelled = result?.cancelled ?? 0;
+      const sentAlready = result?.sentAlready ?? [];
+      // A save that left the outbox alone *clears* the banner rather than
+      // leaving the previous «تم إضافة ٣ رسائل» standing over a correction
+      // that added nothing — the stale sentence would be read as this save's.
+      setNotice(
+        queued > 0 || cancelled > 0 || sentAlready.length > 0
+          ? { sessionId: vars.sessionId, queued, cancelled, sentAlready }
+          : null,
+      );
       queryClient.invalidateQueries({ queryKey: ["messages"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
@@ -284,6 +325,21 @@ export function Attendance() {
           list.map((session) => {
             const roster = session.roster ?? [];
             const counts = tally(roster);
+
+            // One action, rendered twice (header on md+, own row below md), so
+            // the behaviour cannot drift between the two placements.
+            const allPresentDisabled = saveMarks.isPending || roster.length === 0;
+            const markAllPresent = () =>
+              mark(
+                session.id,
+                roster.map(
+                  (entry): AttendanceMark => ({
+                    studentId: entry.studentId,
+                    status: "PRESENT",
+                  }),
+                ),
+              );
+
             return (
               <Card
                 key={session.id}
@@ -307,19 +363,17 @@ export function Attendance() {
                   </span>
                 }
                 actions={
+                  /* md+ only: there the header has room for the class name and
+                     the full wording side by side. Below md this same action is
+                     the full-width row under the counters instead — the header
+                     is 288px wide at 360px and the two cannot share it.
+                     `max-md:hidden` rather than `hidden`, because Button already
+                     carries `inline-flex`, which sorts after `.hidden` and wins. */
                   <Button
-                    size="sm"
                     variant="secondary"
-                    disabled={saveMarks.isPending || roster.length === 0}
-                    onClick={() =>
-                      mark(
-                        session.id,
-                        roster.map((entry) => ({
-                          studentId: entry.studentId,
-                          status: "PRESENT",
-                        })),
-                      )
-                    }
+                    disabled={allPresentDisabled}
+                    onClick={markAllPresent}
+                    className="whitespace-nowrap max-md:hidden"
                   >
                     تحديد الكل حاضر
                   </Button>
@@ -327,7 +381,7 @@ export function Attendance() {
               >
                 {/* Live counters. Each chip prints its own Arabic word, so the
                     tally survives being read in greyscale. */}
-                <div className="flex flex-wrap items-center gap-2 px-5 pb-4 pt-3 sm:px-6">
+                <div className="flex flex-wrap items-center gap-2 px-5 pb-3 pt-3 sm:px-6 md:pb-4">
                   <Badge tone="green">حاضر {arNum(counts.present)}</Badge>
                   <Badge tone="red">غائب {arNum(counts.absent)}</Badge>
                   <Badge tone="amber">متأخر {arNum(counts.late)}</Badge>
@@ -337,17 +391,58 @@ export function Attendance() {
                   )}
                 </div>
 
+                {/* Phones: the action stands on its own row *under* the chips
+                    rather than squeezing the title, full width so it can never
+                    be clipped, and labelled «الكل حاضر» — the short form fits a
+                    360px screen with room to spare, the header keeps the full
+                    «تحديد الكل حاضر». Default size, so it is 44px tall. */}
+                <div className="px-5 pb-4 sm:px-6 md:hidden">
+                  <Button
+                    variant="secondary"
+                    disabled={allPresentDisabled}
+                    onClick={markAllPresent}
+                    className="w-full whitespace-nowrap"
+                  >
+                    الكل حاضر
+                  </Button>
+                </div>
+
                 {notice && notice.sessionId === session.id ? (
-                  <div className="mx-5 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[var(--brand-soft)] px-4 py-3 text-sm sm:mx-6">
-                    <span className="text-[var(--ink)]">
-                      تم إضافة {arNum(notice.queued)} رسالة إلى قائمة الإرسال
-                    </span>
-                    <Link
-                      to="/messages"
-                      className="font-semibold text-[var(--brand-ink)] underline underline-offset-4"
-                    >
-                      فتح قائمة الإرسال
-                    </Link>
+                  <div className="mx-5 mb-4 space-y-2 sm:mx-6">
+                    {outboxSummaryAr(notice.queued, notice.cancelled) ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[var(--brand-soft)] px-4 py-3 text-sm">
+                        <span className="text-start text-[var(--ink)]">
+                          {outboxSummaryAr(notice.queued, notice.cancelled)}
+                        </span>
+                        <Link
+                          to="/messages"
+                          className="font-semibold text-[var(--brand-ink)] underline underline-offset-4"
+                        >
+                          فتح قائمة الإرسال
+                        </Link>
+                      </div>
+                    ) : null}
+
+                    {/* The one outcome the teacher has to act on: the alert had
+                        already left the queue, so correcting the mark cannot
+                        take it back and the parent is holding a message about a
+                        class their child actually attended. */}
+                    {notice.sentAlready.length > 0 ? (
+                      <p
+                        role="alert"
+                        className="rounded-2xl bg-[var(--late-soft)] px-4 py-3 text-start text-sm font-semibold leading-6 text-[var(--late-ink)]"
+                      >
+                        تنبيه: أُرسل{" "}
+                        {notice.sentAlready
+                          .map(
+                            (item) =>
+                              `${TEMPLATE_LABEL_AR[item.templateKey]} لولي أمر "${item.studentName}"`,
+                          )
+                          .join(" و")}{" "}
+                        قبل تعديل الحضور — لا يمكن سحب رسالة وصلت بالفعل، ويمكنك إرسال تصحيح
+                        يدوياً.
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
 

@@ -10,8 +10,13 @@
  * be dispatched in place with «إرسال تلقائي», so the queue is the single place
  * that answers "did this parent hear from us?" regardless of tier.
  *
- * Visually the screen is a segmented control over a stack of message cards. The
- * message body is the point of the card, so it gets the raised --surface-2
+ * Visually the screen is a segmented control over a stack of message cards, and
+ * *inside* the selected tab those cards are split by kind: الغياب، التأخير،
+ * المستوى، التقارير الشهرية. The queue is reviewed one kind at a time — "ابعت
+ * الغياب دلوقتي، الدرجات بعدين" — so every section carries its own count and
+ * its own «إرسال الكل», and the global one walks the sections in that order.
+ *
+ * The message body is the point of the card, so it gets the raised --surface-2
  * block, `leading-7`, and a «عرض الكل» expander that only appears when the text
  * is actually clipped — measured, not guessed from a line count.
  */
@@ -39,12 +44,20 @@ import {
   Meter,
   Modal,
   PageHeader,
+  Section,
+  Spinner,
   Textarea,
   cn,
 } from "../components/ui";
-import { MESSAGE_STATUS_AR, MESSAGE_STATUS_TONE, arDateTime, arNum } from "../lib/format";
+import {
+  MESSAGE_STATUS_AR,
+  MESSAGE_STATUS_TONE,
+  TEMPLATE_LABEL_AR,
+  arDateTime,
+  arNum,
+} from "../lib/format";
 import { isNativeApp } from "../lib/apiBase";
-import { openExternal } from "../lib/openExternal";
+import { openWhatsapp } from "../lib/openExternal";
 
 type Tab = MessageStatus | "ALL";
 
@@ -52,16 +65,12 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "PENDING", label: "قيد الانتظار" },
   { value: "SENT", label: "تم الإرسال" },
   { value: "FAILED", label: "فشل" },
+  { value: "CANCELLED", label: "ملغاة" },
   { value: "ALL", label: "الكل" },
 ];
 
-const TEMPLATE_LABEL_AR: Record<string, string> = {
-  ABSENCE: "تنبيه غياب",
-  LATE: "تنبيه تأخير",
-  LOW_GRADE: "تنبيه مستوى",
-  MONTHLY_REPORT: "التقرير الشهري",
-  CUSTOM: "رسالة مخصّصة",
-};
+/** Shown on a cancelled card when the server did not spell the reason out. */
+const CANCEL_REASON_FALLBACK = "أُلغيت قبل إرسالها بعد تصحيح البيانات.";
 
 /** Popup blockers throttle windows opened in a tight loop; a beat apart survives. */
 const LINK_DELAY_MS = 800;
@@ -96,6 +105,75 @@ function relativeTime(isoTimestamp: string | null | undefined): string {
     if (magnitude >= ms) return RELATIVE.format(Math.round(diff / ms), unit);
   }
   return RELATIVE.format(Math.round(diff / 60_000), "minute");
+}
+
+/* ──────────────────────────── kinds & sections ────────────────────────── */
+
+/**
+ * The queue used to be one undifferentiated pile. It is *reviewed* by kind, so
+ * this array is both the order the sections appear in and the order a bulk run
+ * walks them in: the absences first, because those are the ones a parent needs
+ * within the hour, and the monthly reports last.
+ */
+const GROUP_ORDER = ["ABSENCE", "LATE", "LOW_GRADE", "MONTHLY_REPORT", "OTHER"] as const;
+
+type GroupKey = (typeof GROUP_ORDER)[number];
+
+const GROUP_LABEL_AR: Record<GroupKey, string> = {
+  ABSENCE: "تنبيهات الغياب",
+  LATE: "تنبيهات التأخير",
+  LOW_GRADE: "تنبيهات المستوى",
+  MONTHLY_REPORT: "التقارير الشهرية",
+  OTHER: "رسائل أخرى",
+};
+
+/** CUSTOM, a retired template key and a null one all land in «رسائل أخرى». */
+function groupOf(templateKey: Message["templateKey"]): GroupKey {
+  switch (templateKey) {
+    case "ABSENCE":
+    case "LATE":
+    case "LOW_GRADE":
+    case "MONTHLY_REPORT":
+      return templateKey;
+    default:
+      return "OTHER";
+  }
+}
+
+interface MessageGroup {
+  key: GroupKey;
+  label: string;
+  items: Message[];
+  /** The subset this section's «إرسال الكل» would actually walk. */
+  sendable: Message[];
+}
+
+/**
+ * Splits the rows on screen into the fixed section order, keeping the newest
+ * first inside each one. A kind with nothing in it is dropped here rather than
+ * rendered as an empty heading — an empty *tab* is the caller's business.
+ */
+function groupMessages(rows: Message[]): MessageGroup[] {
+  const buckets = new Map<GroupKey, Message[]>();
+  for (const message of rows) {
+    const key = groupOf(message.templateKey);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(message);
+    else buckets.set(key, [message]);
+  }
+
+  const groups: MessageGroup[] = [];
+  for (const key of GROUP_ORDER) {
+    const items = buckets.get(key);
+    if (!items || items.length === 0) continue;
+    groups.push({
+      key,
+      label: GROUP_LABEL_AR[key],
+      items,
+      sendable: items.filter((message) => message.status === "PENDING"),
+    });
+  }
+  return groups;
 }
 
 /* ────────────────────────────── small parts ───────────────────────────── */
@@ -206,7 +284,24 @@ function MessageBody({ body }: { body: string }) {
 
 /* ─────────────────────────────── the page ─────────────────────────────── */
 
-type BulkRun = { mode: "LINK" | "AUTO"; done: number; total: number; failed: number };
+/** "ALL" walks every section in `GROUP_ORDER`; a key walks that section alone. */
+type BulkScope = GroupKey | "ALL";
+
+type BulkRun = {
+  mode: "LINK" | "AUTO";
+  scope: BulkScope;
+  done: number;
+  total: number;
+  failed: number;
+};
+
+/** The message being handled *right now* — "٣" while the third one is open. */
+const inFlight = (run: BulkRun): number => Math.min(run.done + 1, run.total);
+
+/** "جارٍ الإرسال ٣ من ١٢" — one wording for the global and the group buttons. */
+function progressLabel(run: BulkRun): string {
+  return `جارٍ الإرسال ${arNum(inFlight(run))} من ${arNum(run.total)}`;
+}
 
 export function SendQueue() {
   const queryClient = useQueryClient();
@@ -255,7 +350,20 @@ export function SendQueue() {
     [all, tab],
   );
 
-  const pending = useMemo(() => all.filter((message) => message.status === "PENDING"), [all]);
+  /** The sections of the tab on screen, already in `GROUP_ORDER`. */
+  const groups = useMemo(() => groupMessages(rows), [rows]);
+
+  /**
+   * Everything still waiting, re-ordered by kind. This — not the raw
+   * newest-first list — is what a bulk run walks, so «إرسال الكل» dispatches the
+   * sections in the same order the eye reads them in.
+   */
+  const pendingOrdered = useMemo(() => {
+    const waiting = all.filter((message) => message.status === "PENDING");
+    return GROUP_ORDER.flatMap((key) =>
+      waiting.filter((message) => groupOf(message.templateKey) === key),
+    );
+  }, [all]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["messages"] });
@@ -308,28 +416,33 @@ export function SendQueue() {
 
   const busy = bulk !== null;
 
+  /** Both links go out together: the APK needs the scheme, the browser the URL. */
   const openWhatsApp = (message: Message) => {
     if (!message.waLink) {
       setNotice("لا يوجد رابط واتساب لهذه الرسالة — راجع رقم ولي الأمر في بيانات الطالب.");
       return;
     }
-    void openExternal(message.waLink);
+    void openWhatsapp({ appLink: message.waAppLink, webLink: message.waLink });
     markSent.mutate(message.id);
   };
 
   /**
-   * Walks the pending list one message at a time. In LINK mode each wa.me URL
-   * is opened and the row marked sent; in AUTO mode the provider does the work.
-   * A snapshot is taken up front so a background refetch cannot shift the list
-   * mid-run, and `cancelRef` lets «إيقاف» stop it between messages.
+   * Walks one scope's share of the pending list, a message at a time. In LINK
+   * mode each chat is opened and the row marked sent; in AUTO mode the provider
+   * does the work. A snapshot is taken up front so a background refetch cannot
+   * shift the list mid-run, and `cancelRef` lets «إيقاف» stop it between
+   * messages.
    */
-  const runBulk = async (mode: BulkRun["mode"]) => {
-    const queue = pending;
+  const runBulk = async (mode: BulkRun["mode"], scope: BulkScope) => {
+    const queue =
+      scope === "ALL"
+        ? pendingOrdered
+        : pendingOrdered.filter((message) => groupOf(message.templateKey) === scope);
     if (queue.length === 0 || busy) return;
 
     cancelRef.current = false;
     setNotice("");
-    setBulk({ mode, done: 0, total: queue.length, failed: 0 });
+    setBulk({ mode, scope, done: 0, total: queue.length, failed: 0 });
 
     let failed = 0;
     let done = 0;
@@ -340,7 +453,7 @@ export function SendQueue() {
       try {
         if (mode === "LINK") {
           if (!message.waLink) throw new Error("رابط واتساب غير متاح");
-          await openExternal(message.waLink);
+          await openWhatsapp({ appLink: message.waAppLink, webLink: message.waLink });
           await api.post<Message>(`/messages/${message.id}/mark-sent`);
         } else {
           const result = await api.post<SendMessageResult>(`/messages/${message.id}/send`);
@@ -351,22 +464,167 @@ export function SendQueue() {
       }
 
       done += 1;
-      setBulk({ mode, done, total: queue.length, failed });
+      setBulk({ mode, scope, done, total: queue.length, failed });
       if (done < queue.length) await sleep(mode === "LINK" ? LINK_DELAY_MS : AUTO_DELAY_MS);
     }
 
     setBulk(null);
     const succeeded = done - failed;
+    /** "… رسالة من تنبيهات الغياب" — the teacher sent a batch, not the queue. */
+    const ofKind = scope === "ALL" ? "" : ` من ${GROUP_LABEL_AR[scope]}`;
     setNotice(
       failed > 0
-        ? `تمت معالجة ${arNum(succeeded)} من ${arNum(queue.length)} رسالة، وتعذّر ${arNum(
+        ? `تمت معالجة ${arNum(succeeded)} من ${arNum(queue.length)} رسالة${ofKind}، وتعذّر ${arNum(
             failed,
           )} — راجع تبويب «فشل».`
         : mode === "LINK"
-          ? `تم فتح ${arNum(succeeded)} رسالة وتعليمها كمُرسَلة.`
-          : `تم إرسال ${arNum(succeeded)} رسالة عبر المزوّد.`,
+          ? `تم فتح ${arNum(succeeded)} رسالة${ofKind} وتعليمها كمُرسَلة.`
+          : `تم إرسال ${arNum(succeeded)} رسالة${ofKind} عبر المزوّد.`,
     );
     invalidate();
+  };
+
+  /** One row of the queue. A factory, so every section renders identical cards. */
+  const renderCard = (message: Message): ReactNode => {
+    const isPending = message.status === "PENDING";
+    const isFailed = message.status === "FAILED";
+    const isDone = message.status === "SENT";
+    const isCancelled = message.status === "CANCELLED";
+    const stamp = isDone ? message.sentAt : message.createdAt;
+
+    return (
+      <Card key={message.id} bodyClassName="p-0" className={cn(isCancelled && "opacity-60")}>
+        {/* ── who, what, when ─────────────────────────────── */}
+        <header className="flex flex-wrap items-start gap-x-3 gap-y-2 border-b border-[var(--border)] px-5 py-4 sm:px-6">
+          <div className="min-w-0 flex-1 basis-full sm:basis-0">
+            {message.studentId ? (
+              <Link
+                to={`/students/${message.studentId}`}
+                className="block truncate text-start text-base font-semibold text-[var(--ink)] transition-colors duration-150 hover:text-[var(--brand-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+              >
+                {message.studentName ?? "طالب محذوف"}
+              </Link>
+            ) : (
+              <p className="truncate text-start text-base font-semibold text-[var(--ink)]">
+                {message.studentName ?? "بدون طالب"}
+              </p>
+            )}
+            <p className="mt-1 truncate text-start text-xs text-[var(--ink-3)]">
+              ولي الأمر: {message.parentName ?? "—"} ·{" "}
+              <span dir="ltr" className="font-mono">
+                {message.toPhone}
+              </span>
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="brand">
+              {/* A retired template key survives on old rows as a value the
+                  union no longer lists — the ?? keeps it from rendering blank. */}
+              {(message.templateKey ? TEMPLATE_LABEL_AR[message.templateKey] : null) ?? "رسالة"}
+            </Badge>
+            <Badge tone={MESSAGE_STATUS_TONE[message.status]}>
+              {MESSAGE_STATUS_AR[message.status] ?? message.status}
+            </Badge>
+            <span className="text-xs text-[var(--ink-3)]" title={arDateTime(stamp)}>
+              {isDone ? "أُرسلت " : ""}
+              {relativeTime(stamp)}
+            </span>
+          </div>
+        </header>
+
+        {/* ── the message itself ──────────────────────────── */}
+        <div className="space-y-3 px-5 py-4 sm:px-6">
+          <MessageBody body={message.body ?? ""} />
+
+          {isCancelled ? (
+            /* A cancelled alert with no explanation reads as a bug, so there is
+               always a sentence here even when the server left the column null. */
+            <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2.5 text-start text-xs font-semibold leading-6 text-[var(--ink-2)]">
+              سبب الإلغاء: {message.error?.trim() ? message.error : CANCEL_REASON_FALLBACK}
+            </p>
+          ) : message.error ? (
+            <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-2.5 text-start text-xs font-semibold leading-6 text-[var(--absent-ink)]">
+              سبب الفشل: {message.error}
+            </p>
+          ) : null}
+        </div>
+
+        {/* A sent message needs no action; a cancelled one must not offer one. */}
+        {isDone || isCancelled ? null : (
+          <footer className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] px-5 py-4 sm:px-6">
+            {isFailed ? (
+              <Button onClick={() => retry.mutate(message.id)} disabled={busy || retry.isPending}>
+                <RotateCw className="h-4 w-4" />
+                إعادة المحاولة
+              </Button>
+            ) : null}
+
+            {isPending || isFailed ? (
+              <>
+                <Button
+                  variant={isFailed ? "secondary" : "primary"}
+                  disabled={busy}
+                  onClick={() => openWhatsApp(message)}
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  فتح واتساب
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={busy || markSent.isPending}
+                  onClick={() => markSent.mutate(message.id)}
+                >
+                  تم الإرسال ✓
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="secondary"
+                disabled={busy || retry.isPending}
+                onClick={() => retry.mutate(message.id)}
+              >
+                إعادة إلى قائمة الانتظار
+              </Button>
+            )}
+
+            {isPending ? (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setEditing({ id: message.id, body: message.body ?? "" })}
+              >
+                تعديل
+              </Button>
+            ) : null}
+
+            {!manualProvider && (isPending || isFailed) ? (
+              <Button
+                variant="secondary"
+                disabled={busy || sendNow.isPending}
+                onClick={() => sendNow.mutate(message.id)}
+              >
+                إرسال تلقائي
+              </Button>
+            ) : null}
+
+            {isPending || isFailed ? (
+              <span className="ms-auto">
+                <ConfirmButton
+                  size="sm"
+                  variant="ghost"
+                  confirmLabel="تأكيد التجاهل؟"
+                  disabled={busy || skip.isPending}
+                  onConfirm={() => skip.mutate(message.id)}
+                >
+                  تجاهل
+                </ConfirmButton>
+              </span>
+            ) : null}
+          </footer>
+        )}
+      </Card>
+    );
   };
 
   return (
@@ -389,32 +647,39 @@ export function SendQueue() {
               <RotateCw className={cn("h-4 w-4", messages.isFetching && "animate-spin")} />
               تحديث
             </Button>
-            {busy ? (
+            {bulk ? (
               <Button
                 variant="danger"
                 onClick={() => {
                   cancelRef.current = true;
                 }}
               >
-                إيقاف ({arNum(bulk.done)}/{arNum(bulk.total)})
+                <span className="tnum">
+                  إيقاف ({arNum(inFlight(bulk))} من {arNum(bulk.total)})
+                </span>
               </Button>
-            ) : (
+            ) : tab === "PENDING" ? (
+              /* The global send belongs to the waiting tab: it walks every
+                 section, in GROUP_ORDER, exactly as they are listed below. */
               <>
-                <Button disabled={pending.length === 0} onClick={() => void runBulk("LINK")}>
+                <Button
+                  disabled={pendingOrdered.length === 0}
+                  onClick={() => void runBulk("LINK", "ALL")}
+                >
                   <Send className="h-4 w-4" />
-                  إرسال الكل ({arNum(pending.length)})
+                  إرسال الكل ({arNum(pendingOrdered.length)})
                 </Button>
                 {!manualProvider ? (
                   <Button
                     variant="secondary"
-                    disabled={pending.length === 0}
-                    onClick={() => void runBulk("AUTO")}
+                    disabled={pendingOrdered.length === 0}
+                    onClick={() => void runBulk("AUTO", "ALL")}
                   >
                     إرسال الكل تلقائياً
                   </Button>
                 ) : null}
               </>
-            )}
+            ) : null}
           </>
         }
       />
@@ -469,8 +734,11 @@ export function SendQueue() {
             <p className="mb-3 text-start text-sm font-semibold text-[var(--ink)]">
               {bulk.mode === "LINK" ? "جارٍ فتح الرسائل…" : "جارٍ الإرسال عبر المزوّد…"}{" "}
               <span className="tnum">
-                {arNum(bulk.done)} من {arNum(bulk.total)}
+                {arNum(inFlight(bulk))} من {arNum(bulk.total)}
               </span>
+              {bulk.scope !== "ALL" ? (
+                <span className="text-[var(--ink-2)]"> · {GROUP_LABEL_AR[bulk.scope]}</span>
+              ) : null}
               {bulk.failed > 0 ? (
                 <span className="text-[var(--ink-2)]"> · تعذّر {arNum(bulk.failed)}</span>
               ) : null}
@@ -479,7 +747,7 @@ export function SendQueue() {
           </Card>
         ) : null}
 
-        {tab === "PENDING" && pending.length > 0 ? (
+        {tab === "PENDING" && pendingOrdered.length > 0 ? (
           <Notice tone="late">
             <span className="font-bold">قبل «إرسال الكل»: </span>
             {nativeShell ? (
@@ -504,7 +772,7 @@ export function SendQueue() {
           </Card>
         ) : messages.isError ? (
           <ErrorLine>{errorMessage(messages.error)}</ErrorLine>
-        ) : rows.length === 0 ? (
+        ) : groups.length === 0 ? (
           <Card bodyClassName="p-0">
             <EmptyState
               icon={<Inbox className="h-6 w-6" />}
@@ -513,12 +781,16 @@ export function SendQueue() {
                   ? "لا توجد رسائل بانتظار الإرسال"
                   : tab === "FAILED"
                     ? "لا توجد رسائل فاشلة"
-                    : "لا توجد رسائل"
+                    : tab === "CANCELLED"
+                      ? "لا توجد رسائل ملغاة"
+                      : "لا توجد رسائل"
               }
               hint={
                 tab === "PENDING"
                   ? "تُضاف الرسائل هنا تلقائياً عند تسجيل غياب أو تأخير أو درجة تحت الحد، وعند إنشاء التقارير الشهرية."
-                  : "ستظهر هنا الرسائل بحسب حالتها."
+                  : tab === "CANCELLED"
+                    ? "تُلغى الرسالة تلقائياً إذا صُحّحت الدرجة أو الحضور قبل أن تُرسل."
+                    : "ستظهر هنا الرسائل بحسب حالتها."
               }
               action={
                 tab === "PENDING" ? (
@@ -533,138 +805,40 @@ export function SendQueue() {
             />
           </Card>
         ) : (
-          <div className="space-y-4">
-            {rows.map((message) => {
-              const isPending = message.status === "PENDING";
-              const isFailed = message.status === "FAILED";
-              const isDone = message.status === "SENT";
-              const stamp = isDone ? message.sentAt : message.createdAt;
-
+          /* ── One section per kind, in GROUP_ORDER, empties omitted ─────── */
+          <div className="space-y-8">
+            {groups.map((group) => {
+              const running = bulk !== null && bulk.scope === group.key;
               return (
-                <Card key={message.id} bodyClassName="p-0">
-                  {/* ── who, what, when ─────────────────────────────── */}
-                  <header className="flex flex-wrap items-start gap-x-3 gap-y-2 border-b border-[var(--border)] px-5 py-4 sm:px-6">
-                    <div className="min-w-0 flex-1 basis-full sm:basis-0">
-                      {message.studentId ? (
-                        <Link
-                          to={`/students/${message.studentId}`}
-                          className="block truncate text-start text-base font-semibold text-[var(--ink)] transition-colors duration-150 hover:text-[var(--brand-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
-                        >
-                          {message.studentName ?? "طالب محذوف"}
-                        </Link>
-                      ) : (
-                        <p className="truncate text-start text-base font-semibold text-[var(--ink)]">
-                          {message.studentName ?? "بدون طالب"}
-                        </p>
-                      )}
-                      <p className="mt-1 truncate text-start text-xs text-[var(--ink-3)]">
-                        ولي الأمر: {message.parentName ?? "—"} ·{" "}
-                        <span dir="ltr" className="font-mono">
-                          {message.toPhone}
-                        </span>
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone="brand">
-                        {TEMPLATE_LABEL_AR[message.templateKey ?? ""] ?? "رسالة"}
-                      </Badge>
-                      <Badge tone={MESSAGE_STATUS_TONE[message.status]}>
-                        {MESSAGE_STATUS_AR[message.status] ?? message.status}
-                      </Badge>
-                      <span className="text-xs text-[var(--ink-3)]" title={arDateTime(stamp)}>
-                        {isDone ? "أُرسلت " : ""}
-                        {relativeTime(stamp)}
+                <Section
+                  key={group.key}
+                  title={
+                    <span className="inline-flex flex-wrap items-center gap-2">
+                      {group.label}
+                      <Badge>{arNum(group.items.length)}</Badge>
+                    </span>
+                  }
+                  action={
+                    running ? (
+                      /* Button-shaped, so the row does not jump while it runs. */
+                      <span className="tnum inline-flex h-9 items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 text-sm font-semibold text-[var(--ink)]">
+                        <Spinner className="h-4 w-4" />
+                        {progressLabel(bulk)}
                       </span>
-                    </div>
-                  </header>
-
-                  {/* ── the message itself ──────────────────────────── */}
-                  <div className="space-y-3 px-5 py-4 sm:px-6">
-                    <MessageBody body={message.body ?? ""} />
-                    {message.error ? (
-                      <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-2.5 text-start text-xs font-semibold leading-6 text-[var(--absent-ink)]">
-                        سبب الفشل: {message.error}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  {isDone ? null : (
-                    <footer className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] px-5 py-4 sm:px-6">
-                      {isFailed ? (
-                        <Button
-                          onClick={() => retry.mutate(message.id)}
-                          disabled={busy || retry.isPending}
-                        >
-                          <RotateCw className="h-4 w-4" />
-                          إعادة المحاولة
-                        </Button>
-                      ) : null}
-
-                      {isPending || isFailed ? (
-                        <>
-                          <Button
-                            variant={isFailed ? "secondary" : "primary"}
-                            disabled={busy}
-                            onClick={() => openWhatsApp(message)}
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                            فتح واتساب
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            disabled={busy || markSent.isPending}
-                            onClick={() => markSent.mutate(message.id)}
-                          >
-                            تم الإرسال ✓
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          variant="secondary"
-                          disabled={busy || retry.isPending}
-                          onClick={() => retry.mutate(message.id)}
-                        >
-                          إعادة إلى قائمة الانتظار
-                        </Button>
-                      )}
-
-                      {isPending ? (
-                        <Button
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => setEditing({ id: message.id, body: message.body ?? "" })}
-                        >
-                          تعديل
-                        </Button>
-                      ) : null}
-
-                      {!manualProvider && (isPending || isFailed) ? (
-                        <Button
-                          variant="secondary"
-                          disabled={busy || sendNow.isPending}
-                          onClick={() => sendNow.mutate(message.id)}
-                        >
-                          إرسال تلقائي
-                        </Button>
-                      ) : null}
-
-                      {isPending || isFailed ? (
-                        <span className="ms-auto">
-                          <ConfirmButton
-                            size="sm"
-                            variant="ghost"
-                            confirmLabel="تأكيد التجاهل؟"
-                            disabled={busy || skip.isPending}
-                            onConfirm={() => skip.mutate(message.id)}
-                          >
-                            تجاهل
-                          </ConfirmButton>
-                        </span>
-                      ) : null}
-                    </footer>
-                  )}
-                </Card>
+                    ) : group.sendable.length > 0 ? (
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void runBulk("LINK", group.key)}
+                      >
+                        <Send className="h-4 w-4" />
+                        إرسال الكل ({arNum(group.sendable.length)})
+                      </Button>
+                    ) : undefined
+                  }
+                >
+                  <div className="space-y-4">{group.items.map(renderCard)}</div>
+                </Section>
               );
             })}
           </div>

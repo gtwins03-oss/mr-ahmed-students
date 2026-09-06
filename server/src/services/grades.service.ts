@@ -4,6 +4,10 @@
  * A blank score is `null` — "did not sit the test". It is excluded from every
  * average and never triggers an alert.
  *
+ * Editing a score back up to the threshold — or blanking it — *withdraws* the
+ * alert it raised (`cancelPending`), so a mistyped mark can never leave a queued
+ * message telling a parent about a grade their child never got.
+ *
  * Like the attendance grid, the sheet is audited per *changed* student: the old
  * scores are read before the upsert so the log can say «من ٤٥ إلى ٧٠», and a
  * re-save with one correction writes exactly one line.
@@ -13,7 +17,7 @@ import type { Request } from "express";
 import { prisma } from "../db";
 import { arNum } from "../lib/arabic";
 import { badRequest, notFound } from "../lib/validate";
-import { enqueueMessage } from "../messaging/outbox";
+import { cancelPending, enqueueMessage, type SentAlready } from "../messaging/outbox";
 import { arDate } from "../messaging/template";
 import { emitChange } from "../realtime";
 import { logAudit } from "./audit.service";
@@ -25,7 +29,14 @@ export type GradeEntry = {
   note?: string | null;
 };
 
-export type SaveGradesResult = { saved: number; queued: number };
+export type SaveGradesResult = {
+  saved: number;
+  queued: number;
+  /** Queued alerts withdrawn because the score that raised them was corrected. */
+  cancelled: number;
+  /** Alerts that had already gone out — a correction cannot unsend them. */
+  sentAlready: SentAlready[];
+};
 
 export async function saveGrades(
   assessmentId: string,
@@ -46,7 +57,7 @@ export async function saveGrades(
   ]);
   if (!assessment) throw notFound("الاختبار غير موجود");
 
-  if (list.length === 0) return { saved: 0, queued: 0 };
+  if (list.length === 0) return { saved: 0, queued: 0, cancelled: 0, sentAlready: [] };
 
   const overMax = list.find((e) => e.score !== null && e.score > assessment.maxScore);
   if (overMax) {
@@ -128,15 +139,79 @@ export async function saveGrades(
 
   if (changed > 0) emitChange("Grade");
 
-  if (!settings.autoSendLowGrade) return { saved: list.length, queued: 0 };
+  /**
+   * Does this score deserve a «تنبيه مستوى»? Raising an alert and withdrawing
+   * one have to be exact opposites of each other — asked twice, the two rules
+   * drift and a corrected score gets queued and cancelled in the same save.
+   *
+   * A blank score is "did not sit the test", never a low grade, and a
+   * non-positive max score cannot be turned into a percentage at all.
+   */
+  const isLow = (score: number | null): boolean =>
+    score !== null &&
+    assessment.maxScore > 0 &&
+    (score / assessment.maxScore) * 100 < settings.lowGradeThreshold;
+
+  // Withdraw the alert a correction just invalidated: a score edited up to (or
+  // above) the threshold — or blanked — no longer describes a low grade, and a
+  // queued «تنبيه مستوى» would tell the parent something that is not true.
+  //
+  // This runs before the `autoSendLowGrade` gate below on purpose: the alert may
+  // well have been queued while that switch was still on, and turning it off
+  // afterwards must not strand the message in the queue. Only a score that
+  // actually moved withdraws anything, and a student with no previous row never
+  // had an alert to withdraw.
+  const stale = list.filter((e) => {
+    const prev = previous.get(e.studentId);
+    return prev !== undefined && prev.score !== e.score && !isLow(e.score);
+  });
+
+  let cancelled = 0;
+  const sentAlready: SentAlready[] = [];
+
+  if (stale.length > 0) {
+    const dedupeKeyFor = (studentId: string): string =>
+      `LOW_GRADE:${assessmentId}:${studentId}`;
+
+    // One query answers "were these ever queued, and where are they now?".
+    // `cancelPending()` alone cannot tell «لا يوجد ما يُلغى» apart from «فات
+    // الأوان», and the second is the case the teacher has to hear about.
+    const rows = await prisma.message.findMany({
+      where: { dedupeKey: { in: stale.map((e) => dedupeKeyFor(e.studentId)) } },
+      select: { dedupeKey: true, status: true },
+    });
+    const statusOf = new Map<string, string>();
+    for (const row of rows) if (row.dedupeKey) statusOf.set(row.dedupeKey, row.status);
+
+    for (const e of stale) {
+      const dedupeKey = dedupeKeyFor(e.studentId);
+      const status = statusOf.get(dedupeKey);
+
+      if (status === "PENDING") {
+        const row = await cancelPending(dedupeKey, "بعد تعديل الدرجة", req);
+        if (row) cancelled += 1;
+      } else if (status === "SENT") {
+        // Impossible to withdraw — the parent already has it. Say so out loud
+        // rather than letting the correction look complete.
+        sentAlready.push({
+          studentId: e.studentId,
+          studentName: nameOf.get(e.studentId) ?? "طالب",
+          templateKey: "LOW_GRADE",
+        });
+      }
+    }
+  }
+
+  if (!settings.autoSendLowGrade) {
+    return { saved: list.length, queued: 0, cancelled, sentAlready };
+  }
 
   let queued = 0;
   for (const e of list) {
     if (e.score === null) continue; // absent from the test ≠ a low grade
-    if (assessment.maxScore <= 0) continue; // guard against a divide-by-zero
+    if (!isLow(e.score)) continue; // at or above the threshold — no alert
 
     const pct = (e.score / assessment.maxScore) * 100;
-    if (pct >= settings.lowGradeThreshold) continue;
 
     const result = await enqueueMessage({
       studentId: e.studentId,
@@ -160,5 +235,5 @@ export async function saveGrades(
 
   if (queued > 0) emitChange("Message");
 
-  return { saved: list.length, queued };
+  return { saved: list.length, queued, cancelled, sentAlready };
 }

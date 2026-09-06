@@ -38,7 +38,7 @@ import {
   StatTile,
   cn,
 } from "../components/ui";
-import { ASSESSMENT_TYPE_AR, arDate, arNum, arPercent } from "../lib/format";
+import { ASSESSMENT_TYPE_AR, TEMPLATE_LABEL_AR, arDate, arNum, arPercent } from "../lib/format";
 
 /** One row of the grid, kept as raw text so a half-typed "1" is never coerced. */
 type RowDraft = { score: string; note: string };
@@ -282,7 +282,12 @@ export function GradeEntry() {
       api.post<SaveResult>(`/assessments/${id}/grades`, payload),
     onSuccess: (result) => {
       setFormError("");
-      setNotice({ saved: result?.saved ?? 0, queued: result?.queued ?? 0 });
+      setNotice({
+        saved: result?.saved ?? 0,
+        queued: result?.queued ?? 0,
+        cancelled: result?.cancelled ?? 0,
+        sentAlready: result?.sentAlready ?? [],
+      });
       // The refetch below now carries exactly what we sent — take it verbatim.
       adoptNextRef.current = true;
       queryClient.invalidateQueries({ queryKey: ["assessment", id] });
@@ -404,22 +409,48 @@ export function GradeEntry() {
 
       <div className="space-y-6">
         {notice ? (
-          <Note tone="brand">
-            <span>
-              تم حفظ {arNum(notice.saved)} درجة
-              {notice.queued > 0
-                ? ` · أُضيفت ${arNum(notice.queued)} رسالة تنبيه لأولياء الأمور إلى قائمة الإرسال`
-                : " · لم تُضَف أي رسائل تنبيه"}
-            </span>
-            {notice.queued > 0 ? (
-              <Link
-                to="/messages"
-                className="font-semibold text-[var(--brand-ink)] underline underline-offset-4"
-              >
-                فتح قائمة الإرسال
-              </Link>
+          <>
+            <Note tone="brand">
+              <span>
+                تم حفظ {arNum(notice.saved)} درجة
+                {notice.queued > 0
+                  ? ` · أُضيفت ${arNum(notice.queued)} رسالة تنبيه لأولياء الأمور إلى قائمة الإرسال`
+                  : " · لم تُضَف أي رسائل تنبيه"}
+                {/* Raising a score back above the حد withdraws the alert it had
+                    queued. That is the correction working, so it is said out
+                    loud — a silent withdrawal reads as a message that vanished. */}
+                {notice.cancelled > 0
+                  ? ` · أُلغيت ${arNum(notice.cancelled)} رسالة تنبيه بعد تعديل الدرجة`
+                  : ""}
+              </span>
+              {notice.queued > 0 || notice.cancelled > 0 ? (
+                <Link
+                  to="/messages"
+                  className="font-semibold text-[var(--brand-ink)] underline underline-offset-4"
+                >
+                  فتح قائمة الإرسال
+                </Link>
+              ) : null}
+            </Note>
+
+            {/* The one outcome the teacher has to act on: the alert had already
+                left the queue, so correcting the score cannot take it back and
+                the parent is holding a message about a grade that changed. */}
+            {notice.sentAlready.length > 0 ? (
+              <Note tone="late">
+                <span>
+                  تنبيه: أُرسل{" "}
+                  {notice.sentAlready
+                    .map(
+                      (item) =>
+                        `${TEMPLATE_LABEL_AR[item.templateKey]} لولي أمر "${item.studentName}"`,
+                    )
+                    .join(" و")}{" "}
+                  قبل تعديل الدرجة — لا يمكن سحب رسالة وصلت بالفعل، ويمكنك إرسال تصحيح يدوياً.
+                </span>
+              </Note>
             ) : null}
-          </Note>
+          </>
         ) : null}
 
         {dirty ? (

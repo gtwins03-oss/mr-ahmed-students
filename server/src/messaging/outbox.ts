@@ -7,9 +7,12 @@
  * other half: on Tier 1/2 it delivers the queue; on Tier 0 it is a deliberate no-op and
  * the teacher's thumb drains the queue from the Send Queue screen.
  */
+import type { Request } from "express";
 import type { Message, Setting, Student } from "@prisma/client";
 
 import { prisma } from "../db";
+import { emitChange } from "../realtime";
+import { logAudit } from "../services/audit.service";
 import { getSettings } from "../services/settings.service";
 import { isValidE164, toE164 } from "../lib/phone";
 import { arDate, arMonth, arTime, render } from "./template";
@@ -109,15 +112,49 @@ export async function enqueueMessage(input: EnqueueInput): Promise<EnqueueResult
   // upserting with an empty `update`) is what lets us tell the caller whether a
   // message was actually added — an empty upsert cannot report that, and it also
   // spends a pointless write on every re-save of an unchanged grid.
+  //
+  // A CANCELLED row is the one exception, and getting it wrong is a trap: the
+  // key is unique and permanent, so returning early on a withdrawn message
+  // would make the withdrawal *final*. Mark ABSENT → correct to PRESENT (the
+  // alert is cancelled) → the student really was absent after all, mark ABSENT
+  // again → nothing is queued and the parent is never told. That row is revived
+  // below instead.
   const existing = await prisma.message.findUnique({
     where: { dedupeKey: input.dedupeKey },
   });
-  if (existing) return { message: existing, created: false };
+  if (existing && existing.status !== "CANCELLED") {
+    return { message: existing, created: false };
+  }
 
   const body = render(template.body, {
     ...baseVars(settings, student),
     ...input.vars,
   });
+
+  // The event is live again, so the withdrawn row goes back into the queue
+  // carrying *today's* text and phone number — the student may have been
+  // renamed, or the parent's number corrected, while it sat cancelled. The
+  // reset matches the «إعادة إلى قائمة الإرسال» button in routes/messages.ts,
+  // and `created: true` because the queue really did gain a message to send.
+  if (existing) {
+    const message = await prisma.message.update({
+      where: { id: existing.id },
+      data: {
+        studentId: student.id,
+        toPhone,
+        channel: input.channel ?? "WHATSAPP",
+        templateKey: input.templateKey,
+        body,
+        status: "PENDING",
+        relatedType: input.relatedType,
+        relatedId: input.relatedId,
+        error: null,
+        attempts: 0,
+        sentAt: null,
+      },
+    });
+    return { message, created: true };
+  }
 
   try {
     const message = await prisma.message.create({
@@ -145,6 +182,99 @@ export async function enqueueMessage(input: EnqueueInput): Promise<EnqueueResult
       return raced ? { message: raced, created: false } : null;
     }
     throw e;
+  }
+}
+
+// ───────────────────────────────── cancel ──────────────────────────────────
+
+/**
+ * An alert that had already left the queue by the time the fact behind it was
+ * corrected. Nothing can be withdrawn — the parent has the message — so the
+ * save reports it back and the teacher decides whether to send a correction.
+ */
+export type SentAlready = {
+  studentId: string;
+  studentName: string;
+  templateKey: TemplateKey;
+};
+
+/** What a withdrawn message *was*, in Arabic — never a bare template key. */
+const CANCELLED_KIND_AR: Record<string, string> = {
+  ABSENCE: "تنبيه الغياب",
+  LATE: "تنبيه التأخير",
+  LOW_GRADE: "تنبيه المستوى",
+  MONTHLY_REPORT: "التقرير الشهري",
+  CUSTOM: "الرسالة المخصصة",
+};
+
+/**
+ * Takes a queued alert back after the fact that raised it was corrected.
+ *
+ * The counterpart of `enqueueMessage()`, and the reason a mistake is now
+ * survivable: marking the wrong student ABSENT queues a message the instant the
+ * grid is saved, and switching them to PRESENT has to *withdraw* it. Left
+ * sitting in the queue, the teacher's thumb would tell a parent their child
+ * missed a class they attended.
+ *
+ * Only a PENDING message can be withdrawn. SENT is already in the parent's
+ * hand — a status column cannot unsend it — and FAILED / SKIPPED were both
+ * decided deliberately, by the provider or by the teacher. Rewriting any of
+ * them would turn the send history into a lie.
+ *
+ * `reasonAr` completes the audit sentence, so pass a clause, not a word:
+ * «بعد تعديل الحضور» → «ألغى تنبيه الغياب لـ "أحمد" بعد تعديل الحضور».
+ *
+ * Returns the row it cancelled, or null when there was nothing to cancel.
+ * Never throws: a failed withdrawal must not turn a saved correction into a
+ * 500 for the teacher, who would then re-save and change nothing.
+ */
+export async function cancelPending(
+  dedupeKey: string,
+  reasonAr: string,
+  req: Request | null = null,
+): Promise<Message | null> {
+  try {
+    const existing = await prisma.message.findUnique({
+      where: { dedupeKey },
+      include: { student: { select: { name: true } } },
+    });
+
+    // Nothing was ever queued for this event, or it has already left the queue.
+    if (!existing || existing.status !== "PENDING") return null;
+
+    // Re-checking the status inside the WHERE makes the withdrawal atomic: if
+    // `drainOutbox()` picked the message up in the microseconds since the read,
+    // this matches nothing and we report "there was nothing to cancel" rather
+    // than marking a message the parent has already received as CANCELLED.
+    const { count } = await prisma.message.updateMany({
+      where: { id: existing.id, status: "PENDING" },
+      data: { status: "CANCELLED", error: truncateError(`أُلغيت ${reasonAr}`) },
+    });
+    if (count === 0) return null;
+
+    const cancelled = await prisma.message.findUnique({ where: { id: existing.id } });
+    if (!cancelled) return null; // deleted from under us — nothing left to log
+
+    const kind = CANCELLED_KIND_AR[cancelled.templateKey ?? ""] ?? "الرسالة";
+    // The number, once the student has been deleted out from under the message.
+    const target = existing.student?.name
+      ? `"${existing.student.name}"`
+      : `الرقم ${cancelled.toPhone}`;
+
+    await logAudit(req, {
+      action: "MESSAGE",
+      entity: "Message",
+      entityId: cancelled.id,
+      summary: `ألغى ${kind} لـ ${target} ${reasonAr}`,
+      before: { status: existing.status },
+      after: { status: cancelled.status, error: cancelled.error },
+    });
+    emitChange("Message");
+
+    return cancelled;
+  } catch (err) {
+    console.error("[outbox] تعذّر إلغاء الرسالة", dedupeKey, err);
+    return null;
   }
 }
 

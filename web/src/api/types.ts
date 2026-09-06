@@ -297,10 +297,25 @@ export interface GradeEntryInput {
   note?: string | null;
 }
 
+/**
+ * An alert that had already left the queue by the time the mark or score behind
+ * it was corrected — nothing can withdraw it, the parent has the message. The
+ * teacher is told so they can decide whether to send a correction by hand.
+ */
+export interface SentAlreadyNotice {
+  studentId: string;
+  studentName: string;
+  templateKey: TemplateKey;
+}
+
 /** Returned by both bulk-save endpoints (attendance and grades). */
 export interface SaveResult {
   saved: number;
   queued: number;
+  /** Queued alerts withdrawn because the mark/score that raised them changed. */
+  cancelled: number;
+  /** Alerts that were already sent when the correction arrived — see above. */
+  sentAlready: SentAlreadyNotice[];
 }
 
 /* ─────────────────────────────── Messaging ────────────────────────────── */
@@ -323,6 +338,12 @@ export interface Message {
   sentAt: string | null;
   /** Computed server-side by `toWaLink()` — Tier 0 click-to-chat URL. */
   waLink: string;
+  /**
+   * The same chat as a `whatsapp://send?phone=…&text=…` link. Inside the APK
+   * this is the one that actually opens the WhatsApp app; `waLink` only ever
+   * reaches its web landing page there. See lib/openExternal.ts.
+   */
+  waAppLink: string;
   provider?: ProviderName | null;
   attempts?: number;
   relatedType?: RelatedType | null;
