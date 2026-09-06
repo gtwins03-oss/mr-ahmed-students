@@ -1,14 +1,141 @@
 @import "tailwindcss";
 
-/* Tailwind v4 is configured entirely from CSS — there is no tailwind.config.js
-   and no postcss.config.js in this project; the @tailwindcss/vite plugin does
-   the rest. Overriding --font-sans here changes the default font everywhere,
-   including Preflight's base rule. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mr Ahmed Ibrahim Students — design tokens.
+
+   Tailwind v4 is configured entirely from CSS: there is no tailwind.config.js
+   and no postcss.config.js in this project, the @tailwindcss/vite plugin does
+   the rest.
+
+   The palette lives in plain custom properties on :root, NOT in @theme. That
+   is deliberate: components consume them as `bg-[var(--surface)]`, which
+   compiles to a literal `var()` reference, so re-declaring the property under
+   :root[data-theme="light"] re-themes the entire app without Tailwind having
+   to emit a second copy of anything.
+
+   Dark is the default. `data-theme="light"` on <html> (stamped before first
+   paint by the inline script in index.html) switches the set.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @theme {
   --font-sans:
     "Cairo", "Segoe UI", Tahoma, "Noto Sans Arabic", "Dubai", system-ui,
     -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-arabic: var(--font-sans);
+}
+
+:root {
+  color-scheme: dark;
+
+  /* Canvas & surfaces */
+  --bg: #0a0b0f;
+  --surface: #14161c;
+  --surface-2: #1c1f27;
+  /* Hover for something already sitting on --surface-2 (buttons, chips). */
+  --surface-3: #242833;
+
+  /* Hairlines — the only elevation this design uses on dark. */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Ink */
+  --ink: #ffffff;
+  --ink-2: #a7adbb;
+  --ink-3: #6e7585;
+
+  /* The single accent. */
+  --brand: #7c5cff;
+  --brand-soft: rgba(124, 92, 255, 0.14);
+  --brand-hover: #6b4bf0;
+  --brand-active: #5c3ee0;
+  /* Text/glyphs printed ON --brand. */
+  --brand-contrast: #ffffff;
+
+  /* Attendance semantics. These are the FILL colours: dots, meters, the
+     selected attendance button. Their meaning never changes. */
+  --present: #0ca30c;
+  --absent: #d03b3b;
+  --late: #fab219;
+  --excused: #6e7585;
+
+  /* Interaction states for the one destructive control. */
+  --absent-hover: #dc5252;
+  --absent-active: #b93232;
+
+  /* Tinted pill backgrounds for the same four states. */
+  --present-soft: rgba(12, 163, 12, 0.16);
+  --absent-soft: rgba(208, 59, 59, 0.16);
+  --late-soft: rgba(250, 178, 25, 0.16);
+  --excused-soft: rgba(110, 117, 133, 0.2);
+
+  /* Legible TEXT versions of the same four states, for use on top of the
+     matching -soft tint. Same hue, lifted until every one clears 4.5:1 on
+     --surface (present 9.2 · absent 7.2 · late 9.9 · excused 8.0 · brand 6.9).
+     Colour still never carries meaning alone — the Arabic word is always
+     printed inside the pill. */
+  --present-ink: #3bd44a;
+  --absent-ink: #ff7a7a;
+  --late-ink: #fab219;
+  --excused-ink: #a7adbb;
+  --brand-ink: #a88fff;
+
+  /* Modal / sheet scrim. */
+  --scrim: rgba(5, 6, 10, 0.68);
+
+  /* No drop shadows on dark. Ever. */
+  --shadow-card: none;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f2f6;
+  --surface-3: #e7e9ef;
+
+  --border: rgba(11, 11, 11, 0.08);
+  --border-strong: rgba(11, 11, 11, 0.14);
+
+  --ink: #0b0b0f;
+  --ink-2: #525461;
+  --ink-3: #898781;
+
+  --brand: #5b3ee8;
+  --brand-soft: rgba(91, 62, 232, 0.1);
+  --brand-hover: #4c31d6;
+  --brand-active: #4128bc;
+  --brand-contrast: #ffffff;
+
+  /* Validated with scripts/validate_palette.js --mode light --surface #FFFFFF:
+     contrast vs surface, CVD separation and normal-vision floor ALL PASS.
+     --present is one step darker than the drafted #0A8A0A, which is what
+     lifts protan separation from ΔE 0.7 (fail) to ΔE 8.1 (pass). */
+  --present: #07730b;
+  --absent: #c23434;
+  --late: #b87a00;
+  --excused: #898781;
+
+  --absent-hover: #a82c2c;
+  --absent-active: #8f2525;
+
+  --present-soft: rgba(7, 115, 11, 0.1);
+  --absent-soft: rgba(194, 52, 52, 0.1);
+  --late-soft: rgba(184, 122, 0, 0.12);
+  --excused-soft: rgba(137, 135, 129, 0.14);
+
+  /* Darkened where the fill colour would not clear 4.5:1 as small bold text
+     on its own tint (present 5.1 · absent 4.6 · late 5.1 · excused 5.8). */
+  --present-ink: #07730b;
+  --absent-ink: #c23434;
+  --late-ink: #8a5b00;
+  --excused-ink: #5f5d58;
+  --brand-ink: #5b3ee8;
+
+  --scrim: rgba(11, 11, 15, 0.45);
+
+  /* At most a whisper. */
+  --shadow-card: 0 1px 2px rgba(11, 11, 11, 0.04);
 }
 
 @layer base {
@@ -18,18 +145,21 @@
   }
 
   body {
-    background-color: var(--color-slate-50);
-    color: var(--color-slate-900);
+    background-color: var(--bg);
+    color: var(--ink);
     -webkit-font-smoothing: antialiased;
-    /* Arabic-Indic digits line up in columns — attendance counters, score
-       grids and money-like figures stop jittering as values change. */
-    font-variant-numeric: tabular-nums;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Consistent, visible keyboard focus without the default browser outline. */
+  /* Keyboard focus is always the accent, never the browser default. */
   :focus-visible {
-    outline: 2px solid var(--color-blue-500);
+    outline: 2px solid var(--brand);
     outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--brand);
+    color: var(--brand-contrast);
   }
 
   /* The score-entry grid is all number inputs; spinners just get in the way
@@ -42,5 +172,112 @@
   input[type="number"]::-webkit-inner-spin-button {
     -webkit-appearance: none;
     margin: 0;
+  }
+
+  /* Native date/time pickers are dark-on-dark by default in a WebView; the
+     colour-scheme above fixes the popup, this fixes the little glyph. */
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="month"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator:hover,
+  input[type="month"]::-webkit-calendar-picker-indicator:hover,
+  input[type="time"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
+
+  /* Scrollbars: part of the surface, not a piece of browser chrome. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-3) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--surface-3);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--border-strong);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  /* Numbers that sit in a table column line up. Hero numbers deliberately do
+     not get this — proportional figures look better at 36px. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The only elevation in the system: none on dark, a whisper on light. */
+  .elev {
+    box-shadow: var(--shadow-card);
+  }
+
+  .anim-fade {
+    animation: tutor-fade 160ms ease-out both;
+  }
+
+  .anim-rise {
+    animation: tutor-rise 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .anim-sheet {
+    animation: tutor-sheet 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes tutor-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tutor-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tutor-sheet {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade,
+  .anim-rise,
+  .anim-sheet {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
   }
 }

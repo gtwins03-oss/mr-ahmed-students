@@ -176,12 +176,20 @@ export const STATUS_AR: Record<AttendanceStatus, string> = {
   EXCUSED: "بعذر",
 };
 
-/** Badge tone for each attendance status — keeps colour choices consistent. */
-export const STATUS_TONE: Record<AttendanceStatus, "green" | "red" | "amber" | "blue"> = {
+/**
+ * Badge tone for each attendance status — keeps colour choices consistent.
+ *
+ * These four are the fixed semantics of the design and must stay pinned to
+ * their own tokens: حاضر --present · غائب --absent · متأخر --late ·
+ * بعذر --excused. In particular EXCUSED is "gray" (--excused) and never
+ * "blue", which resolves to the brand accent and would make an excused
+ * absence look like the app's one highlight colour.
+ */
+export const STATUS_TONE: Record<AttendanceStatus, "green" | "red" | "amber" | "gray"> = {
   PRESENT: "green",
   ABSENT: "red",
   LATE: "amber",
-  EXCUSED: "blue",
+  EXCUSED: "gray",
 };
 
 export const MESSAGE_STATUS_AR: Record<MessageStatus, string> = {

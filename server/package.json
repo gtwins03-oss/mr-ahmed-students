@@ -1,8 +1,8 @@
 {
-  "name": "mr-ahmed-server",
+  "name": "mr-ahmed-ibrahim-students-server",
   "version": "1.0.0",
   "private": true,
-  "description": "API + cron + messaging outbox for the Student Management & Notification System",
+  "description": "API + cron + messaging outbox for Mr Ahmed Ibrahim Students",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

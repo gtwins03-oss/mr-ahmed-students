@@ -1,18 +1,21 @@
 /**
  * /settings — everything the teacher can change without a developer.
  *
- * Four independent sections, each with its own Save button: general options,
- * the messaging provider, the Arabic templates, and the account password.
- * Saving is per-section on purpose — a half-typed Green API token must never
- * be able to block a change to the low-grade threshold, and every section maps
- * to a different endpoint anyway.
+ * Five independent sections, each responsible for its own state: general
+ * options, the messaging provider, the Arabic templates, the account password,
+ * and the appearance of the app itself. Saving is per-section on purpose — a
+ * half-typed Green API token must never be able to block a change to the
+ * low-grade threshold, and every section maps to a different endpoint anyway.
  *
  * Each Save stays disabled until that section is actually dirty, so the screen
- * tells you at a glance whether anything is still unsaved.
+ * tells you at a glance whether anything is still unsaved. «المظهر» is the one
+ * section with no Save button: a theme applies the instant it is chosen and is
+ * remembered on the device, not on the server.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Moon, Sun } from "lucide-react";
 
 import { api, errorMessage } from "../api/client";
 import type {
@@ -30,8 +33,10 @@ import {
   PageHeader,
   Select,
   Textarea,
+  cn,
 } from "../components/ui";
 import { arDate, arMonth, arNum, arTime, currentMonthISO, todayISO } from "../lib/format";
+import { useTheme, type Theme } from "../lib/theme";
 
 /* ──────────────────────────────── shapes ──────────────────────────────── */
 
@@ -205,9 +210,13 @@ function SaveAction({
   return (
     <>
       {notice ? (
-        <span className="text-sm font-semibold text-emerald-700">{notice}</span>
+        <span className="text-xs font-semibold text-[var(--present-ink)] sm:text-sm">
+          {notice}
+        </span>
       ) : dirty ? (
-        <span className="text-sm font-semibold text-amber-600">تغييرات غير محفوظة</span>
+        <span className="text-xs font-semibold text-[var(--late-ink)] sm:text-sm">
+          تغييرات غير محفوظة
+        </span>
       ) : null}
       <Button size="sm" onClick={onSave} disabled={!dirty || pending}>
         {pending ? "جارٍ الحفظ…" : "حفظ"}
@@ -216,10 +225,20 @@ function SaveAction({
   );
 }
 
+/** Every failure on this screen looks the same: one tinted line, Arabic first. */
 function ErrorLine({ error }: { error: unknown }) {
   return (
-    <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-start text-sm font-medium text-rose-700">
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold leading-7 text-[var(--ink)]">
       {errorMessage(error)}
+    </p>
+  );
+}
+
+/** A short warning block — the tint is the signal, the words carry the meaning. */
+function WarningBlock({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--late-soft)] px-4 py-3 text-start text-sm leading-7 text-[var(--ink)]">
+      {children}
     </p>
   );
 }
@@ -236,18 +255,71 @@ function Toggle({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-3 transition-colors has-[:checked]:border-emerald-300 has-[:checked]:bg-emerald-50">
+    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-4 transition-colors duration-150 hover:border-[var(--border-strong)] has-[:checked]:border-[var(--brand)] has-[:checked]:bg-[var(--brand-soft)]">
       <input
         type="checkbox"
-        className="mt-0.5 h-5 w-5 accent-emerald-600"
+        className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--brand)]"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="min-w-0 text-start">
-        <span className="block text-sm font-semibold text-slate-800">{label}</span>
-        <span className="block text-xs leading-5 text-slate-500">{hint}</span>
+        <span className="block text-sm font-semibold text-[var(--ink)]">{label}</span>
+        <span className="mt-0.5 block text-xs leading-5 text-[var(--ink-2)]">{hint}</span>
       </span>
     </label>
+  );
+}
+
+const THEME_OPTIONS: { value: Theme; label: string; icon: typeof Moon }[] = [
+  { value: "dark", label: "داكن", icon: Moon },
+  { value: "light", label: "فاتح", icon: Sun },
+];
+
+/**
+ * «المظهر». No Save button by design: the choice paints immediately and lives
+ * in localStorage on this device, so there is nothing to send anywhere.
+ */
+function AppearanceSection() {
+  const [theme, setTheme] = useTheme();
+
+  return (
+    <Card title="المظهر">
+      <div className="space-y-3">
+        <div
+          role="radiogroup"
+          aria-label="مظهر التطبيق"
+          className="inline-flex gap-1 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-1"
+        >
+          {THEME_OPTIONS.map(({ value, label, icon: Icon }) => {
+            const active = theme === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setTheme(value)}
+                className={cn(
+                  "flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-colors duration-150",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+                  active
+                    ? "bg-[var(--brand)] text-[var(--brand-contrast)]"
+                    : "text-[var(--ink-2)] hover:bg-[var(--surface-3)] hover:text-[var(--ink)]",
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="text-start text-xs leading-6 text-[var(--ink-3)]">
+          الوضع الداكن هو الافتراضي وأوفر لبطارية الشاشة أثناء الحصة. الاختيار محفوظ على هذا
+          الجهاز فقط ولا يؤثر على بقية المستخدمين.
+        </p>
+      </div>
+    </Card>
   );
 }
 
@@ -562,7 +634,9 @@ export function Settings() {
     return (
       <>
         <PageHeader title="الإعدادات" />
-        <LoadingBlock />
+        <Card>
+          <LoadingBlock />
+        </Card>
       </>
     );
   }
@@ -571,7 +645,10 @@ export function Settings() {
     return (
       <>
         <PageHeader title="الإعدادات" />
-        <ErrorLine error={settings.error} />
+        <div className="space-y-6">
+          <ErrorLine error={settings.error} />
+          <AppearanceSection />
+        </div>
       </>
     );
   }
@@ -582,7 +659,7 @@ export function Settings() {
     <div>
       <PageHeader
         title="الإعدادات"
-        subtitle="بيانات المُدرِّس، مزوّد الإرسال، نصوص الرسائل، وكلمة المرور"
+        subtitle="بيانات المُدرِّس، مزوّد الإرسال، نصوص الرسائل، كلمة المرور، ومظهر التطبيق"
       />
 
       <div className="space-y-6">
@@ -598,7 +675,7 @@ export function Settings() {
             />
           }
         >
-          <div className="space-y-4">
+          <div className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Input
                 label="اسم المُدرِّس"
@@ -626,7 +703,7 @@ export function Settings() {
                   value={general.lowGradeThreshold}
                   onChange={(e) => setGeneral({ ...general, lowGradeThreshold: e.target.value })}
                 />
-                <p className="mt-1 text-start text-xs text-slate-500">
+                <p className="mt-1.5 text-start text-xs text-[var(--ink-3)]">
                   أقل من {thresholdText}٪ يُعتبر ضعيفاً
                 </p>
               </div>
@@ -668,7 +745,7 @@ export function Settings() {
                   onChange={(e) => setGeneral({ ...general, quietHoursEnd: e.target.value })}
                 />
               </div>
-              <p className="mt-2 text-start text-xs leading-6 text-slate-500">
+              <p className="mt-2.5 text-start text-xs leading-6 text-[var(--ink-3)]">
                 بين {arTime(general.quietHoursStart)} و{arTime(general.quietHoursEnd)} لا تُرسَل أي
                 رسالة تلقائياً — تبقى في قائمة الإرسال حتى ينتهي وقت الهدوء. الإرسال اليدوي من
                 قائمة الإرسال يعمل في أي وقت.
@@ -691,7 +768,7 @@ export function Settings() {
             />
           }
         >
-          <div className="space-y-4">
+          <div className="space-y-5">
             <div className="grid gap-4 lg:grid-cols-3">
               <Select
                 label="المزوّد"
@@ -709,20 +786,20 @@ export function Settings() {
                   </option>
                 ))}
               </Select>
-              <p className="self-end pb-2.5 text-start text-xs leading-6 text-slate-500 lg:col-span-2">
+              <p className="self-end pb-2.5 text-start text-xs leading-6 text-[var(--ink-2)] lg:col-span-2">
                 {providerHint}
               </p>
             </div>
 
             {providerForm.provider === "GREEN_API" ? (
               <>
-                <p className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-start text-sm leading-7 text-amber-900">
+                <WarningBlock>
                   <span className="font-bold">تنبيه مهم: </span>
                   Green API بوّابة غير رسمية لواتساب. الرسائل تُرسَل من رقمك عبر جهاز مرتبط، وهذا
                   يخالف شروط استخدام واتساب، وهناك خطر حقيقي بحظر الرقم — خاصة عند إرسال عدد كبير
                   من الرسائل المتشابهة دفعة واحدة. لا تربط رقمك الشخصي الأساسي. الخيار الافتراضي
                   «روابط واتساب» بلا أي مخاطرة لأنك أنت من يضغط إرسال داخل التطبيق.
-                </p>
+                </WarningBlock>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <Input
                     label="idInstance"
@@ -822,7 +899,7 @@ export function Settings() {
 
             {saveProvider.isError ? <ErrorLine error={saveProvider.error} /> : null}
 
-            <div className="border-t border-slate-100 pt-4">
+            <div className="border-t border-[var(--border)] pt-5">
               <div className="flex flex-wrap items-start gap-3">
                 <div className="w-56">
                   <Input
@@ -846,7 +923,7 @@ export function Settings() {
                 </Button>
               </div>
 
-              <p className="mt-2 text-start text-xs text-slate-500">
+              <p className="mt-2.5 text-start text-xs text-[var(--ink-3)]">
                 احفظ إعدادات المزوّد أولاً حتى يستخدم الاختبار البيانات الجديدة.
               </p>
 
@@ -858,13 +935,12 @@ export function Settings() {
 
               {testResult ? (
                 <div
-                  className={`mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-start text-sm font-medium ${
-                    testResult.ok
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                      : "border-rose-200 bg-rose-50 text-rose-700"
-                  }`}
+                  className={cn(
+                    "mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border)] px-4 py-3 text-start text-sm leading-7 text-[var(--ink)]",
+                    testResult.ok ? "bg-[var(--present-soft)]" : "bg-[var(--absent-soft)]",
+                  )}
                 >
-                  <span>
+                  <span className="min-w-0 flex-1">
                     {testResult.message}
                     {testResult.error ? ` (${testResult.error})` : ""}
                   </span>
@@ -888,7 +964,9 @@ export function Settings() {
           title="قوالب الرسائل"
           actions={
             templateNotice ? (
-              <span className="text-sm font-semibold text-emerald-700">{templateNotice}</span>
+              <span className="text-xs font-semibold text-[var(--present-ink)] sm:text-sm">
+                {templateNotice}
+              </span>
             ) : undefined
           }
         >
@@ -897,11 +975,11 @@ export function Settings() {
           ) : templates.isError ? (
             <ErrorLine error={templates.error} />
           ) : templateRows.length === 0 ? (
-            <p className="py-2 text-start text-sm text-slate-500">
+            <p className="py-2 text-start text-sm text-[var(--ink-2)]">
               لا توجد قوالب — شغّل تهيئة قاعدة البيانات (prisma/seed).
             </p>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {templateRows.map((row) => {
                 const draft = drafts[row.key];
                 if (!draft) return null;
@@ -913,23 +991,27 @@ export function Settings() {
                 const saving = saveTemplate.isPending && saveTemplate.variables?.key === row.key;
                 const keys = placeholders.data?.[row.key] ?? [];
                 const serverPreview = previews.data?.[row.key] ?? "";
-                const preview = dirty || !serverPreview
-                  ? renderTemplate(draft.body, previewVars)
-                  : serverPreview;
+                const preview =
+                  dirty || !serverPreview
+                    ? renderTemplate(draft.body, previewVars)
+                    : serverPreview;
 
                 return (
-                  <section key={row.key} className="rounded-xl border border-slate-200 p-4">
-                    <div className="mb-3 flex flex-wrap items-center gap-3">
-                      <h3 className="text-start text-base font-bold text-slate-900">
+                  <section
+                    key={row.key}
+                    className="rounded-[20px] border border-[var(--border)] p-5"
+                  >
+                    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+                      <h3 className="text-start text-base font-semibold text-[var(--ink)]">
                         {draft.name}
                       </h3>
                       <Badge tone="gray">
                         <span dir="ltr">{row.key}</span>
                       </Badge>
-                      <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
+                      <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--ink-2)]">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 accent-emerald-600"
+                          className="h-4 w-4 accent-[var(--brand)]"
                           checked={draft.isActive}
                           onChange={(e) =>
                             setDrafts((current) => ({
@@ -940,7 +1022,7 @@ export function Settings() {
                         />
                         مفعّل
                       </label>
-                      <span className="ms-auto">
+                      <span className="ms-auto flex items-center gap-2">
                         <SaveAction
                           dirty={dirty && draft.body.trim() !== ""}
                           pending={saving}
@@ -957,7 +1039,7 @@ export function Settings() {
                       </span>
                     </div>
 
-                    <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="grid gap-5 lg:grid-cols-2">
                       <div>
                         <Textarea
                           label="نص القالب"
@@ -975,17 +1057,21 @@ export function Settings() {
                         />
                         {keys.length > 0 ? (
                           <>
-                            <p className="mt-2 text-start text-xs text-slate-500">
+                            <p className="mt-3 text-start text-xs text-[var(--ink-3)]">
                               اضغط أي عنصر لإدراجه في مكان المؤشر داخل النص:
                             </p>
-                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            <div className="mt-2 flex flex-wrap gap-1.5">
                               {keys.map((name) => (
                                 <button
                                   key={name}
                                   type="button"
                                   dir="ltr"
                                   onClick={() => insertPlaceholder(row.key, name)}
-                                  className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-xs text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                                  className={cn(
+                                    "rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 font-mono text-xs text-[var(--ink-2)] transition-colors duration-150",
+                                    "hover:border-[var(--brand)] hover:bg-[var(--brand-soft)] hover:text-[var(--brand-ink)]",
+                                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+                                  )}
                                 >
                                   {`{{${name}}}`}
                                 </button>
@@ -996,7 +1082,7 @@ export function Settings() {
                       </div>
 
                       <div>
-                        <p className="mb-1.5 flex items-center gap-2 text-start text-sm font-semibold text-slate-700">
+                        <p className="mb-1.5 flex flex-wrap items-center gap-2 text-start text-xs font-semibold text-[var(--ink-3)]">
                           المعاينة
                           {dirty ? (
                             <Badge tone="amber">نص غير محفوظ</Badge>
@@ -1004,11 +1090,12 @@ export function Settings() {
                             <Badge tone="gray">النسخة المحفوظة</Badge>
                           )}
                         </p>
-                        <div className="min-h-40 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-3 text-start text-sm leading-8 text-slate-800">
+                        <div className="min-h-40 whitespace-pre-wrap rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-4 text-start text-sm leading-7 text-[var(--ink)]">
                           {preview || "اكتب نص القالب لتظهر المعاينة."}
                         </div>
-                        <p className="mt-1.5 text-start text-xs text-slate-500">
-                          المعاينة ببيانات طالب افتراضية — تُملأ عند الإرسال ببيانات الطالب الحقيقي.
+                        <p className="mt-2 text-start text-xs leading-6 text-[var(--ink-3)]">
+                          المعاينة ببيانات طالب افتراضية — تُملأ عند الإرسال ببيانات الطالب
+                          الحقيقي.
                         </p>
                         {saveTemplate.isError && saveTemplate.variables?.key === row.key ? (
                           <div className="mt-2">
@@ -1029,7 +1116,9 @@ export function Settings() {
           title="الحساب"
           actions={
             passwordNotice ? (
-              <span className="text-sm font-semibold text-emerald-700">{passwordNotice}</span>
+              <span className="text-xs font-semibold text-[var(--present-ink)] sm:text-sm">
+                {passwordNotice}
+              </span>
             ) : undefined
           }
         >
@@ -1058,13 +1147,13 @@ export function Settings() {
               />
             </div>
 
-            <p className="text-start text-xs text-slate-500">
+            <p className="text-start text-xs leading-6 text-[var(--ink-3)]">
               كلمة المرور الجديدة لا تقل عن {arNum(PASSWORD_MIN_LENGTH)} أحرف ويجب أن تختلف عن
               الحالية. بعد التغيير قد تحتاج إلى تسجيل الدخول من جديد على الأجهزة الأخرى.
             </p>
 
             {passwordError ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-start text-sm font-medium text-rose-700">
+              <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold leading-7 text-[var(--ink)]">
                 {passwordError}
               </p>
             ) : null}
@@ -1083,6 +1172,9 @@ export function Settings() {
             </div>
           </div>
         </Card>
+
+        {/* ─────────────────── 5 · appearance ─────────────────── */}
+        <AppearanceSection />
       </div>
     </div>
   );

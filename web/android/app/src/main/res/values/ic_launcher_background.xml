@@ -3,14 +3,21 @@
   The lower layer of the adaptive icon (Android 8+).
 
   @capacitor/assets writes #FFFFFF here by default, which is wrong for this
-  icon: the foreground layer is a blue rounded square inset to the 66% safe
+  icon: the foreground layer is the brand rounded square inset to the 66% safe
   zone, so a white background shows as a pale ring around it under the
-  launcher's circle / squircle mask. Painting the background the same blue
-  makes the whole tile one solid colour whatever mask the device applies.
+  launcher's circle / squircle mask. Painting the background the same brand
+  violet makes the whole tile one solid colour whatever mask the device applies.
 
-  Re-running `npm run assets:gen` resets this file and mipmap-anydpi-v26/
-  ic_launcher*.xml back to the white default — reapply both together.
+  The value is the "brand" accent token from web/src/index.css. Re-running
+  `npm run brand` at the repo root (or the `assets:gen` script inside web/)
+  resets this file and mipmap-anydpi-v26/ic_launcher*.xml back to the white
+  default — reapply both together.
+
+  NOTE: never write two consecutive hyphens anywhere in this comment. XML
+  forbids them inside a comment, and aapt fails :app:mergeDebugResources with
+  «The string is not permitted within comments». That is why the CSS custom
+  property and the npm flag are described in prose instead of quoted verbatim.
 -->
 <resources>
-    <color name="ic_launcher_background">#2563EB</color>
+    <color name="ic_launcher_background">#7C5CFF</color>
 </resources>

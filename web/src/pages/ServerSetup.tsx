@@ -11,18 +11,31 @@
  * The connection test deliberately does not go through `api/client.ts`: that
  * client points at the *saved* address, and the whole point here is to probe a
  * candidate one before committing to it.
+ *
+ * It renders outside the app shell, so it borrows the login screen's furniture:
+ * the brand lockup on the bare canvas above a single card. «رجوع» is hidden in
+ * exactly the situation where it would be a dead end — the APK with no address
+ * stored, which `RequireAuth` would immediately bounce back to this page.
  */
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, Server, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, Server, XCircle } from "lucide-react";
 
-import { apiUrl, getApiBase, isNativeApp, normaliseApiBase, setApiBase } from "../lib/apiBase";
+import {
+  apiUrl,
+  getApiBase,
+  isApiBaseConfigured,
+  isNativeApp,
+  normaliseApiBase,
+  setApiBase,
+} from "../lib/apiBase";
 import { getToken } from "../lib/auth";
 import { reconnectRealtime } from "../lib/socket";
 import { arNum } from "../lib/format";
-import { Button, Card, Input, PageHeader } from "../components/ui";
+import { LogoLockup } from "../components/Brand";
+import { Button, Card, Input, cn } from "../components/ui";
 
 /** A probe must not hang as long as a real request; the teacher is watching. */
 const PROBE_TIMEOUT_MS = 8_000;
@@ -69,20 +82,32 @@ async function testConnection(base: string): Promise<TestResult> {
   return { ok: true, message: "تم الاتصال بالخادم بنجاح." };
 }
 
+/** Success and failure differ by icon, word and tint — never by colour alone. */
 function ResultLine({ result }: { result: TestResult }) {
-  const tone = result.ok
-    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-    : "border-rose-200 bg-rose-50 text-rose-700";
   const Icon = result.ok ? CheckCircle2 : XCircle;
   return (
     <p
       role="status"
       aria-live="polite"
-      className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm font-medium ${tone}`}
+      className={cn(
+        "flex items-start gap-2 rounded-2xl border border-[var(--border)] px-4 py-3 text-start text-sm font-semibold leading-6",
+        result.ok
+          ? "bg-[var(--present-soft)] text-[var(--present-ink)]"
+          : "bg-[var(--absent-soft)] text-[var(--absent-ink)]",
+      )}
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-      <span className="text-start">{result.message}</span>
+      <span>{result.message}</span>
     </p>
+  );
+}
+
+/** Inline monospace Latin inside an Arabic sentence, forced left-to-right. */
+function Mono({ children }: { children: string }) {
+  return (
+    <span dir="ltr" className="font-mono text-[var(--ink)]">
+      {children}
+    </span>
   );
 }
 
@@ -98,6 +123,13 @@ export function ServerSetup() {
   const candidate = normaliseApiBase(value);
   const native = isNativeApp();
   const backTo = getToken() ? "/" : "/login";
+
+  /**
+   * Going back is only offered when there is somewhere to go back *to*: inside
+   * the APK with no address stored, `RequireAuth` sends the teacher straight
+   * here again, and a button that loops is worse than no button.
+   */
+  const canGoBack = !native || isApiBaseConfigured();
 
   async function runTest() {
     setTesting(true);
@@ -115,96 +147,114 @@ export function ServerSetup() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-lg px-4 py-8 sm:py-12">
-      <PageHeader
-        title="إعداد الخادم"
-        subtitle="عنوان الجهاز الذي يعمل عليه خادم النظام"
-      />
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--bg)] px-4 py-10">
+      <div className="w-full max-w-lg">
+        <div className="mb-8 flex justify-center">
+          <LogoLockup size={56} subtitle />
+        </div>
 
-      <Card>
-        <div className="space-y-4">
-          <p className="text-start text-sm leading-7 text-slate-600">
-            اكتب عنوان الخادم كما يظهر على الجهاز الذي يشغّله، مثل{" "}
-            <span dir="ltr" className="font-mono text-slate-800">
-              http://192.168.1.10:4000
-            </span>{" "}
-            — يكفي أن يكون الجهازان على نفس شبكة الواي فاي. لا حاجة لكتابة
-            <span dir="ltr" className="px-1 font-mono">
-              /api
-            </span>
-            في نهاية العنوان.
-          </p>
+        <Card title="إعداد الخادم">
+          <div className="space-y-5">
+            <p className="text-start text-sm leading-7 text-[var(--ink-2)]">
+              اكتب عنوان الخادم كما يظهر على الجهاز الذي يشغّله، مثل{" "}
+              <Mono>http://192.168.1.10:4000</Mono> — يكفي أن يكون الجهازان على نفس شبكة الواي
+              فاي. لا حاجة لكتابة <Mono>/api</Mono> في نهاية العنوان.
+            </p>
 
-          <Input
-            label="عنوان الخادم"
-            dir="ltr"
-            inputMode="url"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="http://192.168.1.10:4000"
-            value={value}
-            onChange={(e) => {
-              setValue(e.target.value);
-              setResult(null);
-            }}
-          />
+            <Input
+              label="عنوان الخادم"
+              dir="ltr"
+              className="font-mono"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="http://192.168.1.10:4000"
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setResult(null);
+              }}
+            />
 
-          <p className="text-start text-xs text-slate-500">
-            العنوان المستخدم حالياً:{" "}
-            <span dir="ltr" className="font-mono text-slate-700">
-              {current || "نفس موقع الصفحة"}
-            </span>
-          </p>
+            <p className="text-start text-xs text-[var(--ink-3)]">
+              العنوان المستخدم حالياً:{" "}
+              <span dir="ltr" className="font-mono text-[var(--ink-2)]">
+                {current || "نفس موقع الصفحة"}
+              </span>
+            </p>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={() => void runTest()} disabled={testing}>
-              {testing ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                  جارٍ الاختبار…
-                </>
-              ) : (
-                <>
-                  <Server className="h-4 w-4" aria-hidden />
-                  اختبار الاتصال
-                </>
-              )}
-            </Button>
-
-            <Button onClick={save} disabled={testing}>
-              حفظ والمتابعة
-            </Button>
-
-            {current !== "" && (
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
               <Button
-                variant="ghost"
-                onClick={() => {
-                  setValue("");
-                  setResult(null);
-                }}
+                variant="secondary"
+                onClick={() => void runTest()}
+                disabled={testing}
+                className="w-full sm:w-auto"
               >
-                استخدام نفس موقع الصفحة
+                {testing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    جارٍ الاختبار…
+                  </>
+                ) : (
+                  <>
+                    <Server className="h-4 w-4" aria-hidden />
+                    اختبار الاتصال
+                  </>
+                )}
               </Button>
+
+              <Button onClick={save} disabled={testing} className="w-full sm:w-auto">
+                حفظ والمتابعة
+              </Button>
+
+              {current !== "" && (
+                <Button
+                  variant="ghost"
+                  className="w-full sm:w-auto"
+                  onClick={() => {
+                    setValue("");
+                    setResult(null);
+                  }}
+                >
+                  استخدام نفس موقع الصفحة
+                </Button>
+              )}
+            </div>
+
+            {result && <ResultLine result={result} />}
+
+            {native && current === "" && (
+              <p
+                role="status"
+                className="flex items-start gap-2 rounded-2xl border border-[var(--border)] bg-[var(--late-soft)] px-4 py-3 text-start text-sm font-semibold leading-6 text-[var(--late-ink)]"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                <span>
+                  التطبيق يعمل كتطبيق مثبَّت على الهاتف، ولا بد من تحديد عنوان الخادم قبل تسجيل
+                  الدخول.
+                </span>
+              </p>
             )}
           </div>
+        </Card>
 
-          {result && <ResultLine result={result} />}
-
-          {native && current === "" && (
-            <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-start text-sm font-medium text-amber-800">
-              التطبيق يعمل كتطبيق مثبَّت على الهاتف، ولا بد من تحديد عنوان الخادم قبل تسجيل
-              الدخول.
-            </p>
-          )}
-
-          <p className="text-start text-xs text-slate-500">
-            <Link to={backTo} className="underline underline-offset-4 hover:text-slate-700">
-              الرجوع
+        {canGoBack && (
+          <div className="mt-5 flex justify-center">
+            <Link
+              to={backTo}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-xl px-2 py-1 text-xs font-semibold text-[var(--ink-2)] transition-colors duration-150 hover:text-[var(--ink)]",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+              )}
+            >
+              {/* RTL: "back" points at the start edge, which is the right. */}
+              <ArrowRight className="h-4 w-4" aria-hidden />
+              رجوع
             </Link>
-          </p>
-        </div>
-      </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

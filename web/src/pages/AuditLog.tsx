@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronDown, History, RotateCw, ShieldCheck } from "lucide-react";
 
@@ -6,14 +6,17 @@ import { api, buildQuery, errorMessage } from "../api/client";
 import type { AuditEntry, User } from "../api/types";
 import { useAuth } from "../lib/auth";
 import {
+  Badge,
   Button,
   Card,
+  Dot,
   EmptyState,
   Input,
   LoadingBlock,
   PageHeader,
   Select,
   cn,
+  type Tone,
 } from "../components/ui";
 import {
   ASSESSMENT_TYPE_AR,
@@ -32,11 +35,13 @@ import {
  * OWNER-only activity trail — the answer to "من غيّر هذا؟".
  *
  * Three things make it worth reading rather than merely correct:
- *  1. entries are grouped by day with «اليوم» / «أمس» headers, so scanning
- *     starts from what happened an hour ago instead of a wall of timestamps;
- *  2. the action is colour-coded, so a row of deletions is visible from across
- *     the room;
- *  3. expanding a row renders the before/after JSON snapshots as an Arabic
+ *  1. entries are grouped by day under sticky «اليوم» / «أمس» headers, so
+ *     scanning starts from what happened an hour ago instead of a wall of
+ *     timestamps;
+ *  2. each action carries a dot in one of the four semantic colours *beside its
+ *     Arabic name*, so a run of deletions is visible from across the room while
+ *     colour never carries the meaning alone;
+ *  3. expanding a row renders the before/after snapshots as an Arabic
  *     field-by-field diff of *changed fields only* — never a raw JSON dump.
  *
  * Anything that looks like a credential (password, hash, token, secret) is
@@ -78,31 +83,22 @@ const ROLE_AR: Record<string, string> = {
   ASSISTANT: "مساعد",
 };
 
-/** Chip colours: green create · amber update · red delete · blue message · gray login. */
-const ACTION_CHIP: Record<string, string> = {
-  CREATE: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  UPDATE: "bg-amber-50 text-amber-700 ring-amber-200",
-  DELETE: "bg-rose-50 text-rose-700 ring-rose-200",
-  MESSAGE: "bg-blue-50 text-blue-700 ring-blue-200",
-  LOGIN: "bg-slate-100 text-slate-600 ring-slate-200",
-  ATTENDANCE: "bg-violet-50 text-violet-700 ring-violet-200",
-  GRADES: "bg-indigo-50 text-indigo-700 ring-indigo-200",
-  SETTINGS: "bg-teal-50 text-teal-700 ring-teal-200",
+/**
+ * The dot beside each action. Deliberately not a rainbow: this reuses the four
+ * semantic colours the whole app already means something by — green added, red
+ * removed, amber changed, the accent for everything the app sent or recorded,
+ * grey for bookkeeping.
+ */
+const ACTION_TONE: Record<string, Tone> = {
+  CREATE: "green",
+  UPDATE: "amber",
+  DELETE: "red",
+  MESSAGE: "brand",
+  ATTENDANCE: "brand",
+  GRADES: "brand",
+  SETTINGS: "gray",
+  LOGIN: "gray",
 };
-
-const ACTION_STRIPE: Record<string, string> = {
-  CREATE: "bg-emerald-400",
-  UPDATE: "bg-amber-400",
-  DELETE: "bg-rose-400",
-  MESSAGE: "bg-blue-400",
-  LOGIN: "bg-slate-300",
-  ATTENDANCE: "bg-violet-400",
-  GRADES: "bg-indigo-400",
-  SETTINGS: "bg-teal-400",
-};
-
-const CHIP_FALLBACK = "bg-slate-100 text-slate-600 ring-slate-200";
-const STRIPE_FALLBACK = "bg-slate-300";
 
 /** Column names as the teacher knows them, not as Prisma spells them. */
 const FIELD_AR: Record<string, string> = {
@@ -374,25 +370,36 @@ interface DayGroup {
 
 /* ─────────────────────────────── the row ──────────────────────────────── */
 
-function RoleChip({ role }: { role: string }) {
+function ErrorLine({ children }: { children: ReactNode }) {
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset",
-        role === "OWNER"
-          ? "bg-blue-50 text-blue-700 ring-blue-200"
-          : "bg-slate-100 text-slate-500 ring-slate-200",
-      )}
-    >
-      {ROLE_AR[role] ?? role}
-    </span>
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold leading-7 text-[var(--ink)]">
+      {children}
+    </p>
+  );
+}
+
+/** One side of the comparison: a label over the value it held. */
+function DiffCell({ heading, value, tone }: { heading: string; value: string; tone: Tone }) {
+  return (
+    <div className="min-w-0">
+      <p className="mb-1 text-start text-[11px] font-semibold text-[var(--ink-3)]">{heading}</p>
+      <p
+        dir="auto"
+        className={cn(
+          "break-words rounded-xl px-3 py-1.5 text-start text-sm leading-6 text-[var(--ink)]",
+          tone === "red" ? "bg-[var(--absent-soft)]" : "bg-[var(--present-soft)]",
+        )}
+      >
+        {value}
+      </p>
+    </div>
   );
 }
 
 function DiffTable({ rows, heading }: { rows: DiffRow[]; heading: string }) {
   if (rows.length === 0) {
     return (
-      <p className="rounded-lg bg-white px-3 py-2 text-sm text-slate-500">
+      <p className="rounded-xl bg-[var(--surface)] px-4 py-2.5 text-start text-sm text-[var(--ink-2)]">
         لا توجد تفاصيل إضافية لهذا الإجراء.
       </p>
     );
@@ -400,54 +407,28 @@ function DiffTable({ rows, heading }: { rows: DiffRow[]; heading: string }) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-bold text-slate-500">{heading}</p>
-
-      <div className="hidden gap-2 px-1 text-[11px] font-bold text-slate-400 sm:grid sm:grid-cols-[9rem_1fr_1fr]">
-        <span>الحقل</span>
-        <span>قبل</span>
-        <span>بعد</span>
-      </div>
+      <p className="text-start text-xs font-semibold text-[var(--ink-3)]">{heading}</p>
 
       <div className="space-y-2">
         {rows.map((row) =>
           row.secret ? (
             <p
               key={row.key}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600"
+              className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-start text-sm leading-6 text-[var(--ink-2)]"
             >
-              تم تغيير <span className="font-bold text-slate-800">{row.label}</span> — القيمة لا
-              تُعرض أبداً.
+              تم تغيير <span className="font-semibold text-[var(--ink)]">{row.label}</span> —
+              القيمة لا تُعرض أبداً.
             </p>
           ) : (
             <div
               key={row.key}
-              className="grid gap-2 rounded-lg border border-slate-200 bg-white p-2 sm:grid-cols-[9rem_1fr_1fr] sm:items-start"
+              className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 sm:grid-cols-[9rem_1fr_1fr] sm:items-start"
             >
-              <span className="px-1 pt-1 text-xs font-bold text-slate-600">{row.label}</span>
-
-              <div>
-                <p className="mb-0.5 px-1 text-[11px] font-semibold text-slate-400 sm:hidden">
-                  قبل
-                </p>
-                <p
-                  dir="auto"
-                  className="break-words rounded-md bg-rose-50 px-2 py-1 text-sm leading-6 text-rose-800"
-                >
-                  {row.before}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-0.5 px-1 text-[11px] font-semibold text-slate-400 sm:hidden">
-                  بعد
-                </p>
-                <p
-                  dir="auto"
-                  className="break-words rounded-md bg-emerald-50 px-2 py-1 text-sm leading-6 text-emerald-800"
-                >
-                  {row.after}
-                </p>
-              </div>
+              <span className="pt-1 text-start text-xs font-semibold text-[var(--ink-2)]">
+                {row.label}
+              </span>
+              <DiffCell heading="قبل" value={row.before} tone="red" />
+              <DiffCell heading="بعد" value={row.after} tone="green" />
             </div>
           ),
         )}
@@ -477,45 +458,37 @@ function EntryRow({
         : "الحقول التي تغيّرت";
 
   return (
-    <li className="relative">
+    <li>
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
         className={cn(
-          "flex w-full items-start gap-3 px-3 py-3 text-start transition-colors hover:bg-slate-50",
-          expanded && "bg-slate-50",
+          "flex w-full items-start gap-3 px-5 py-3.5 text-start transition-colors duration-150 hover:bg-[var(--surface-2)]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--brand)]",
+          expanded && "bg-[var(--surface-2)]",
         )}
       >
-        <span
-          aria-hidden
-          className={cn(
-            "mt-1 h-8 w-1 shrink-0 rounded-full",
-            ACTION_STRIPE[action] ?? STRIPE_FALLBACK,
-          )}
-        />
-
-        <span className="mt-0.5 w-14 shrink-0 text-xs font-semibold tabular-nums text-slate-500">
+        <span className="tnum mt-0.5 w-14 shrink-0 text-start text-xs font-semibold text-[var(--ink-3)]">
           {clockOf(entry.createdAt)}
         </span>
 
-        <span
-          className={cn(
-            "mt-0.5 shrink-0 rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
-            ACTION_CHIP[action] ?? CHIP_FALLBACK,
-          )}
-        >
-          {ACTION_AR[action] ?? action ?? "إجراء"}
+        <span className="mt-1.5 shrink-0">
+          <Dot tone={ACTION_TONE[action] ?? "gray"} />
         </span>
 
         <span className="min-w-0 flex-1">
-          <span className="block text-sm leading-6 text-slate-800">
-            {entry.summary ?? ""}
-          </span>
-          <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-            <span className="font-semibold text-slate-600">{entry.userName || "مستخدم محذوف"}</span>
-            <RoleChip role={String(entry.userRole ?? "")} />
-            <span className="text-slate-300">·</span>
+          <span className="block text-sm leading-6 text-[var(--ink)]">{entry.summary ?? ""}</span>
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--ink-3)]">
+            <span className="font-semibold text-[var(--ink-2)]">
+              {entry.userName || "مستخدم محذوف"}
+            </span>
+            <Badge tone={String(entry.userRole ?? "") === "OWNER" ? "brand" : "gray"}>
+              {ROLE_AR[String(entry.userRole ?? "")] ?? String(entry.userRole ?? "")}
+            </Badge>
+            <span aria-hidden>·</span>
+            <span>{ACTION_AR[action] ?? action ?? "إجراء"}</span>
+            <span aria-hidden>·</span>
             <span>{ENTITY_AR[String(entry.entity ?? "")] ?? String(entry.entity ?? "")}</span>
           </span>
         </span>
@@ -523,17 +496,17 @@ function EntryRow({
         <ChevronDown
           aria-hidden
           className={cn(
-            "mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform",
+            "mt-1 h-4 w-4 shrink-0 text-[var(--ink-3)] transition-transform duration-150",
             expanded && "rotate-180",
           )}
         />
       </button>
 
       {expanded ? (
-        <div className="border-t border-slate-100 bg-slate-50 px-3 py-3 sm:ps-20">
+        <div className="border-t border-[var(--border)] bg-[var(--surface-2)] px-5 py-4 sm:ps-[4.75rem]">
           <DiffTable rows={diff} heading={heading} />
 
-          <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+          <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-start text-[11px] text-[var(--ink-3)]">
             <span>{arDateTime(entry.createdAt)}</span>
             {entry.entityId ? (
               <span dir="ltr" className="font-mono">
@@ -684,7 +657,7 @@ export function AuditLog() {
     return (
       <div>
         <PageHeader title="سجلّ النشاط" />
-        <Card>
+        <Card bodyClassName="p-0">
           <EmptyState
             icon={<ShieldCheck className="h-6 w-6" />}
             title="هذه الصفحة للمالك فقط"
@@ -699,86 +672,84 @@ export function AuditLog() {
     <div>
       <PageHeader
         title="سجلّ النشاط"
-        subtitle={`${arNum(filtered.length)} إجراء معروض${
-          hasFilters ? " بعد التصفية" : ""
-        }`}
+        subtitle={`${arNum(filtered.length)} إجراء معروض${hasFilters ? " بعد التصفية" : ""}`}
         actions={
           <Button variant="secondary" size="sm" onClick={() => void audit.refetch()}>
-            <RotateCw className={cn("h-4 w-4", isBusy && "animate-spin")} />
+            <RotateCw className={cn("h-4 w-4", isBusy && "animate-spin")} aria-hidden />
             تحديث
           </Button>
         }
       />
 
-      <div className="space-y-4">
+      <div className="space-y-6">
         {/* ── Filters ─────────────────────────────────────────────────── */}
-        <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-3">
-          <Input
-            label="بحث في السجل"
-            placeholder="اسم طالب، كلمة في الوصف…"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-          />
+        <Card>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Input
+              label="بحث في السجل"
+              placeholder="اسم طالب، كلمة في الوصف…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
 
-          <Select
-            label="المستخدم"
-            value={userId}
-            onChange={(e) => {
-              setUserId(e.target.value);
-              resetLimit();
-            }}
-          >
-            <option value="">كل المستخدمين</option>
-            {userOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
-          </Select>
+            <Select
+              label="المستخدم"
+              value={userId}
+              onChange={(e) => {
+                setUserId(e.target.value);
+                resetLimit();
+              }}
+            >
+              <option value="">كل المستخدمين</option>
+              {userOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </Select>
 
-          <Select
-            label="نوع الإجراء"
-            value={action}
-            onChange={(e) => {
-              setAction(e.target.value);
-              resetLimit();
-            }}
-          >
-            <option value="">كل الإجراءات</option>
-            {Object.entries(ACTION_AR).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </Select>
+            <Select
+              label="نوع الإجراء"
+              value={action}
+              onChange={(e) => {
+                setAction(e.target.value);
+                resetLimit();
+              }}
+            >
+              <option value="">كل الإجراءات</option>
+              {Object.entries(ACTION_AR).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </Select>
 
-          <Select
-            label="النوع"
-            value={entity}
-            onChange={(e) => {
-              setEntity(e.target.value);
-              resetLimit();
-            }}
-          >
-            <option value="">كل الأنواع</option>
-            {Object.entries(ENTITY_AR).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </Select>
+            <Select
+              label="النوع"
+              value={entity}
+              onChange={(e) => {
+                setEntity(e.target.value);
+                resetLimit();
+              }}
+            >
+              <option value="">كل الأنواع</option>
+              {Object.entries(ENTITY_AR).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </Select>
 
-          <Input
-            label="من تاريخ"
-            type="date"
-            value={from}
-            onChange={(e) => {
-              setFrom(e.target.value);
-              resetLimit();
-            }}
-          />
+            <Input
+              label="من تاريخ"
+              type="date"
+              value={from}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                resetLimit();
+              }}
+            />
 
-          <div className="flex items-end gap-2">
             <Input
               label="إلى تاريخ"
               type="date"
@@ -788,9 +759,13 @@ export function AuditLog() {
                 resetLimit();
               }}
             />
-            {hasFilters ? (
+          </div>
+
+          {hasFilters ? (
+            <div className="mt-4 flex justify-start">
               <Button
                 variant="ghost"
+                size="sm"
                 onClick={() => {
                   setUserId("");
                   setAction("");
@@ -804,9 +779,9 @@ export function AuditLog() {
               >
                 مسح
               </Button>
-            ) : null}
-          </div>
-        </div>
+            </div>
+          ) : null}
+        </Card>
 
         {/* ── The trail ───────────────────────────────────────────────── */}
         {audit.isLoading ? (
@@ -814,11 +789,9 @@ export function AuditLog() {
             <LoadingBlock />
           </Card>
         ) : audit.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(audit.error)}
-          </p>
+          <ErrorLine>{errorMessage(audit.error)}</ErrorLine>
         ) : groups.length === 0 ? (
-          <Card>
+          <Card bodyClassName="p-0">
             <EmptyState
               icon={<History className="h-6 w-6" />}
               title={hasFilters ? "لا نتائج مطابقة" : "السجل فارغ حتى الآن"}
@@ -830,19 +803,23 @@ export function AuditLog() {
             />
           </Card>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-6">
             {groups.map((group) => (
               <section key={group.key || "unknown"}>
-                <div className="mb-2 flex items-center gap-3">
-                  <h2 className="text-sm font-bold text-slate-700">{group.label}</h2>
-                  <span className="text-xs text-slate-400">
+                {/* The mobile shell keeps a 59px bar pinned at the top, so the
+                    day header parks just under it and sits flush on desktop. */}
+                <div className="sticky top-14 z-20 mb-3 flex items-center gap-3 bg-[var(--bg)] py-2 md:top-0">
+                  <h2 className="text-start text-sm font-semibold text-[var(--ink)]">
+                    {group.label}
+                  </h2>
+                  <span className="text-xs text-[var(--ink-3)]">
                     {arNum(group.entries.length)} إجراء
                   </span>
-                  <span className="h-px flex-1 bg-slate-200" aria-hidden />
+                  <span className="h-px flex-1 bg-[var(--border)]" aria-hidden />
                 </div>
 
                 <Card bodyClassName="p-0">
-                  <ul className="divide-y divide-slate-100">
+                  <ul className="divide-y divide-[var(--border)]">
                     {group.entries.map((entry) => (
                       <EntryRow
                         key={entry.id}
@@ -868,7 +845,7 @@ export function AuditLog() {
                   {isBusy ? "جارٍ التحميل…" : "تحميل المزيد"}
                 </Button>
               ) : (
-                <p className="text-xs text-slate-400">وصلت إلى بداية السجل</p>
+                <p className="text-xs text-[var(--ink-3)]">وصلت إلى بداية السجل</p>
               )}
             </div>
           </div>

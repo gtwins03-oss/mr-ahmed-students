@@ -1,9 +1,9 @@
 {
-  "name": "mr-ahmed-web",
+  "name": "mr-ahmed-ibrahim-students-web",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Arabic RTL React front-end for the Student Management & Notification System",
+  "description": "Arabic RTL React front-end for Mr Ahmed Ibrahim Students",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,7 +11,7 @@
     "typecheck": "tsc -b --noEmit",
     "cap:sync": "cap sync android",
     "cap:open": "cap open android",
-    "assets:gen": "node scripts/generate-assets.mjs && npx --yes @capacitor/assets@3 generate --android"
+    "assets:gen": "node scripts/generate-brand-assets.mjs && npx --yes @capacitor/assets@3 generate --android"
   },
   "dependencies": {
     "@capacitor/android": "6.2.2",

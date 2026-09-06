@@ -9,11 +9,23 @@
  * With an autonomous provider configured (Green API / Twilio) the same rows can
  * be dispatched in place with «إرسال تلقائي», so the queue is the single place
  * that answers "did this parent hear from us?" regardless of tier.
+ *
+ * Visually the screen is a segmented control over a stack of message cards. The
+ * message body is the point of the card, so it gets the raised --surface-2
+ * block, `leading-7`, and a «عرض الكل» expander that only appears when the text
+ * is actually clipped — measured, not guessed from a line count.
  */
 
-import { useMemo, useRef, useState } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, Inbox, RotateCw, Send } from "lucide-react";
 
 import { api, errorMessage } from "../api/client";
 import type { Message, MessageStatus, SendMessageResult, Settings } from "../api/types";
@@ -24,9 +36,11 @@ import {
   ConfirmButton,
   EmptyState,
   LoadingBlock,
+  Meter,
   Modal,
   PageHeader,
   Textarea,
+  cn,
 } from "../components/ui";
 import { MESSAGE_STATUS_AR, MESSAGE_STATUS_TONE, arDateTime, arNum } from "../lib/format";
 import { isNativeApp } from "../lib/apiBase";
@@ -82,6 +96,112 @@ function relativeTime(isoTimestamp: string | null | undefined): string {
     if (magnitude >= ms) return RELATIVE.format(Math.round(diff / ms), unit);
   }
   return RELATIVE.format(Math.round(diff / 60_000), "minute");
+}
+
+/* ────────────────────────────── small parts ───────────────────────────── */
+
+type NoticeTone = "brand" | "present" | "late" | "absent";
+
+const NOTICE_TINT: Record<NoticeTone, string> = {
+  brand: "bg-[var(--brand-soft)]",
+  present: "bg-[var(--present-soft)]",
+  late: "bg-[var(--late-soft)]",
+  absent: "bg-[var(--absent-soft)]",
+};
+
+/**
+ * A tinted strip. The tint is the only colour it carries — every word inside
+ * stays --ink / --ink-2, which is legible over all four tints in both themes.
+ */
+function Notice({
+  tone = "brand",
+  onDismiss,
+  children,
+}: {
+  tone?: NoticeTone;
+  onDismiss?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-3 rounded-2xl border border-[var(--border)] px-4 py-3",
+        NOTICE_TINT[tone],
+      )}
+    >
+      <div className="min-w-0 flex-1 text-start text-sm leading-7 text-[var(--ink)]">
+        {children}
+      </div>
+      {onDismiss !== undefined && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="shrink-0 rounded-lg px-1 py-0.5 text-xs font-semibold text-[var(--ink-3)] transition-colors duration-150 hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+        >
+          إخفاء
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The queue's error state — never a bare sentence on the canvas. */
+function ErrorLine({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold leading-7 text-[var(--ink)]">
+      {children}
+    </p>
+  );
+}
+
+/** The message body, clipped to a readable height until «عرض الكل». */
+function MessageBody({ body }: { body: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [clipped, setClipped] = useState(false);
+
+  // Measured, so a two-line message never grows a pointless expander. Skipped
+  // while expanded: the clamp is off then, and re-measuring would report "fits"
+  // and pull the «عرض أقل» button out from under the reader.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+
+    const measure = () => setClipped(el.scrollHeight - el.clientHeight > 4);
+    measure();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [body, expanded]);
+
+  return (
+    <div>
+      <p
+        ref={ref}
+        className={cn(
+          "overflow-hidden whitespace-pre-wrap rounded-2xl bg-[var(--surface-2)] p-4 text-start text-sm leading-7 text-[var(--ink)]",
+          !expanded && "max-h-40",
+        )}
+      >
+        {body}
+      </p>
+      {clipped && (
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          aria-expanded={expanded}
+          className="mt-2 rounded-lg text-xs font-semibold text-[var(--brand-ink)] transition-colors duration-150 hover:text-[var(--brand)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+        >
+          {expanded ? "عرض أقل" : "عرض الكل"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /* ─────────────────────────────── the page ─────────────────────────────── */
@@ -266,6 +386,7 @@ export function SendQueue() {
               disabled={busy}
               onClick={() => queryClient.invalidateQueries({ queryKey: ["messages"] })}
             >
+              <RotateCw className={cn("h-4 w-4", messages.isFetching && "animate-spin")} />
               تحديث
             </Button>
             {busy ? (
@@ -280,6 +401,7 @@ export function SendQueue() {
             ) : (
               <>
                 <Button disabled={pending.length === 0} onClick={() => void runBulk("LINK")}>
+                  <Send className="h-4 w-4" />
                   إرسال الكل ({arNum(pending.length)})
                 </Button>
                 {!manualProvider ? (
@@ -297,62 +419,68 @@ export function SendQueue() {
         }
       />
 
-      <div className="space-y-5">
-        <div className="flex flex-wrap gap-2">
-          {TABS.map((entry) => {
-            const active = tab === entry.value;
-            return (
-              <button
-                key={entry.value}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setTab(entry.value)}
-                className={`rounded-xl px-4 py-2 text-sm font-bold transition-colors ${
-                  active
-                    ? "bg-slate-900 text-white shadow-sm"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
-              >
-                {entry.label}
-                <span className="ms-2 tabular-nums opacity-80">{arNum(counts[entry.value])}</span>
-              </button>
-            );
-          })}
+      <div className="space-y-6">
+        {/* ── Segmented control: one row, scrolls sideways on a phone ────── */}
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <div
+            role="group"
+            aria-label="حالة الرسائل"
+            className="inline-flex gap-1 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-1"
+          >
+            {TABS.map((entry) => {
+              const active = tab === entry.value;
+              return (
+                <button
+                  key={entry.value}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setTab(entry.value)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold transition-colors duration-150",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+                    active
+                      ? "bg-[var(--brand)] text-[var(--brand-contrast)]"
+                      : "text-[var(--ink-2)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]",
+                  )}
+                >
+                  {entry.label}
+                  <span
+                    className={cn(
+                      "tnum rounded-full px-1.5 text-xs font-bold",
+                      active
+                        ? "bg-[var(--brand-active)] text-[var(--brand-contrast)]"
+                        : "bg-[var(--surface-2)] text-[var(--ink-3)]",
+                    )}
+                  >
+                    {arNum(counts[entry.value])}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {notice ? (
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
-            <span>{notice}</span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-4"
-              onClick={() => setNotice("")}
-            >
-              إخفاء
-            </button>
-          </div>
+          <Notice onDismiss={() => setNotice("")}>{notice}</Notice>
         ) : null}
 
         {bulk ? (
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-            <p className="mb-2 text-start text-sm font-semibold text-slate-700">
+          <Card>
+            <p className="mb-3 text-start text-sm font-semibold text-[var(--ink)]">
               {bulk.mode === "LINK" ? "جارٍ فتح الرسائل…" : "جارٍ الإرسال عبر المزوّد…"}{" "}
-              {arNum(bulk.done)} من {arNum(bulk.total)}
-              {bulk.failed > 0 ? ` · تعذّر ${arNum(bulk.failed)}` : ""}
+              <span className="tnum">
+                {arNum(bulk.done)} من {arNum(bulk.total)}
+              </span>
+              {bulk.failed > 0 ? (
+                <span className="text-[var(--ink-2)]"> · تعذّر {arNum(bulk.failed)}</span>
+              ) : null}
             </p>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full bg-blue-600 transition-all"
-                style={{
-                  width: `${bulk.total > 0 ? Math.round((bulk.done / bulk.total) * 100) : 0}%`,
-                }}
-              />
-            </div>
-          </div>
+            <Meter value={bulk.done} max={bulk.total} label="تقدّم الإرسال" />
+          </Card>
         ) : null}
 
         {tab === "PENDING" && pending.length > 0 ? (
-          <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-start text-sm leading-6 text-amber-900">
+          <Notice tone="late">
             <span className="font-bold">قبل «إرسال الكل»: </span>
             {nativeShell ? (
               <>
@@ -367,18 +495,19 @@ export function SendQueue() {
                 المحاولة — الرسائل التي لم تُفتح تبقى في قائمة الانتظار.
               </>
             )}
-          </p>
+          </Notice>
         ) : null}
 
         {messages.isLoading ? (
-          <LoadingBlock />
+          <Card>
+            <LoadingBlock />
+          </Card>
         ) : messages.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(messages.error)}
-          </p>
+          <ErrorLine>{errorMessage(messages.error)}</ErrorLine>
         ) : rows.length === 0 ? (
           <Card bodyClassName="p-0">
             <EmptyState
+              icon={<Inbox className="h-6 w-6" />}
               title={
                 tab === "PENDING"
                   ? "لا توجد رسائل بانتظار الإرسال"
@@ -395,7 +524,7 @@ export function SendQueue() {
                 tab === "PENDING" ? (
                   <Link
                     to="/attendance"
-                    className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+                    className="inline-flex h-11 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-5 text-sm font-semibold text-[var(--ink)] transition-colors duration-150 hover:border-[var(--border-strong)] hover:bg-[var(--surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
                   >
                     تسجيل الحضور
                   </Link>
@@ -412,25 +541,23 @@ export function SendQueue() {
               const stamp = isDone ? message.sentAt : message.createdAt;
 
               return (
-                <article
-                  key={message.id}
-                  className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-                >
-                  <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
-                    <div className="min-w-0 flex-1">
+                <Card key={message.id} bodyClassName="p-0">
+                  {/* ── who, what, when ─────────────────────────────── */}
+                  <header className="flex flex-wrap items-start gap-x-3 gap-y-2 border-b border-[var(--border)] px-5 py-4 sm:px-6">
+                    <div className="min-w-0 flex-1 basis-full sm:basis-0">
                       {message.studentId ? (
                         <Link
                           to={`/students/${message.studentId}`}
-                          className="block truncate text-start font-bold text-slate-900 hover:text-blue-700"
+                          className="block truncate text-start text-base font-semibold text-[var(--ink)] transition-colors duration-150 hover:text-[var(--brand-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
                         >
                           {message.studentName ?? "طالب محذوف"}
                         </Link>
                       ) : (
-                        <p className="truncate text-start font-bold text-slate-900">
+                        <p className="truncate text-start text-base font-semibold text-[var(--ink)]">
                           {message.studentName ?? "بدون طالب"}
                         </p>
                       )}
-                      <p className="truncate text-start text-sm text-slate-500">
+                      <p className="mt-1 truncate text-start text-xs text-[var(--ink-3)]">
                         ولي الأمر: {message.parentName ?? "—"} ·{" "}
                         <span dir="ltr" className="font-mono">
                           {message.toPhone}
@@ -438,36 +565,38 @@ export function SendQueue() {
                       </p>
                     </div>
 
-                    <Badge tone="blue">
-                      {TEMPLATE_LABEL_AR[message.templateKey ?? ""] ?? "رسالة"}
-                    </Badge>
-                    <Badge tone={MESSAGE_STATUS_TONE[message.status]}>
-                      {MESSAGE_STATUS_AR[message.status] ?? message.status}
-                    </Badge>
-                    <span className="text-xs text-slate-500" title={arDateTime(stamp)}>
-                      {isDone ? "أُرسلت " : ""}
-                      {relativeTime(stamp)}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="brand">
+                        {TEMPLATE_LABEL_AR[message.templateKey ?? ""] ?? "رسالة"}
+                      </Badge>
+                      <Badge tone={MESSAGE_STATUS_TONE[message.status]}>
+                        {MESSAGE_STATUS_AR[message.status] ?? message.status}
+                      </Badge>
+                      <span className="text-xs text-[var(--ink-3)]" title={arDateTime(stamp)}>
+                        {isDone ? "أُرسلت " : ""}
+                        {relativeTime(stamp)}
+                      </span>
+                    </div>
                   </header>
 
-                  <div className="px-4 py-3">
-                    <p className="whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-start text-sm leading-8 text-slate-800">
-                      {message.body}
-                    </p>
+                  {/* ── the message itself ──────────────────────────── */}
+                  <div className="space-y-3 px-5 py-4 sm:px-6">
+                    <MessageBody body={message.body ?? ""} />
                     {message.error ? (
-                      <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-start text-xs font-medium text-rose-700">
+                      <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-2.5 text-start text-xs font-semibold leading-6 text-[var(--absent-ink)]">
                         سبب الفشل: {message.error}
                       </p>
                     ) : null}
                   </div>
 
                   {isDone ? null : (
-                    <footer className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-3">
+                    <footer className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] px-5 py-4 sm:px-6">
                       {isFailed ? (
                         <Button
                           onClick={() => retry.mutate(message.id)}
                           disabled={busy || retry.isPending}
                         >
+                          <RotateCw className="h-4 w-4" />
                           إعادة المحاولة
                         </Button>
                       ) : null}
@@ -479,6 +608,7 @@ export function SendQueue() {
                             disabled={busy}
                             onClick={() => openWhatsApp(message)}
                           >
+                            <ExternalLink className="h-4 w-4" />
                             فتح واتساب
                           </Button>
                           <Button
@@ -534,7 +664,7 @@ export function SendQueue() {
                       ) : null}
                     </footer>
                   )}
-                </article>
+                </Card>
               );
             })}
           </div>
@@ -570,15 +700,11 @@ export function SendQueue() {
               value={editing.body}
               onChange={(e) => setEditing({ ...editing, body: e.target.value })}
             />
-            <p className="text-start text-xs text-slate-500">
+            <p className="text-start text-xs leading-6 text-[var(--ink-3)]">
               التعديل يخصّ هذه الرسالة فقط. لتغيير الصياغة لكل الرسائل القادمة عدّل القالب من
               صفحة الإعدادات.
             </p>
-            {editBody.isError ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
-                {errorMessage(editBody.error)}
-              </p>
-            ) : null}
+            {editBody.isError ? <ErrorLine>{errorMessage(editBody.error)}</ErrorLine> : null}
           </div>
         ) : null}
       </Modal>

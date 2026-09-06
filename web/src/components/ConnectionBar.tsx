@@ -101,8 +101,14 @@ function useSustained(active: boolean, delayMs: number): boolean {
 
 /* ──────────────────────────────── the bar ─────────────────────────────── */
 
+/**
+ * One hairline strip. The tint and the ink are the only things that vary, and
+ * both come from the semantic tokens in index.css — the same four that carry
+ * attendance meaning — so the bar re-themes with everything else instead of
+ * painting a pastel Tailwind swatch onto the near-black canvas.
+ */
 const BAR_BASE =
-  "flex items-center justify-center gap-2 border-b px-4 py-1.5 text-xs font-semibold sm:text-sm";
+  "flex items-center justify-center gap-2 border-b border-[var(--border)] px-4 py-1.5 text-xs font-semibold sm:text-sm";
 
 export function ConnectionBar() {
   const browserOnline = useOnline();
@@ -133,13 +139,13 @@ export function ConnectionBar() {
       <div
         role="status"
         aria-live="polite"
-        className={cn(BAR_BASE, "border-amber-200 bg-amber-50 text-amber-800")}
+        className={cn(BAR_BASE, "bg-[var(--late-soft)] text-[var(--late-ink)]")}
       >
         <WifiOff className="h-4 w-4 shrink-0" aria-hidden />
         <span className="text-start">لا يوجد اتصال — سيتم حفظ تعديلاتك وإرسالها تلقائياً</span>
         <Link
           to="/server-setup"
-          className="shrink-0 underline underline-offset-4 hover:text-amber-900"
+          className="shrink-0 underline underline-offset-4 transition-colors duration-150 hover:text-[var(--ink)]"
         >
           عنوان الخادم
         </Link>
@@ -152,7 +158,7 @@ export function ConnectionBar() {
       <div
         role="status"
         aria-live="polite"
-        className={cn(BAR_BASE, "border-blue-200 bg-blue-50 text-blue-800")}
+        className={cn(BAR_BASE, "bg-[var(--brand-soft)] text-[var(--brand-ink)]")}
       >
         <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
         <span className="text-start">جارٍ رفع {pendingLabel(pending)}…</span>
@@ -165,7 +171,7 @@ export function ConnectionBar() {
       <div
         role="status"
         aria-live="polite"
-        className={cn(BAR_BASE, "border-emerald-200 bg-emerald-50 text-emerald-800")}
+        className={cn(BAR_BASE, "bg-[var(--present-soft)] text-[var(--present-ink)]")}
       >
         <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
         <span className="text-start">تمت المزامنة</span>

@@ -16,7 +16,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  */
 const config: CapacitorConfig = {
   appId: "com.mrahmed.students",
-  appName: "إدارة الطلاب",
+  appName: "Mr Ahmed Ibrahim Students",
   webDir: "dist",
 
   android: {

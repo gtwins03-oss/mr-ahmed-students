@@ -1,11 +1,26 @@
-import { useMemo, useState } from "react";
+/**
+ * الطلاب — the roster.
+ *
+ * Restyled to the Telda-style language: one filter row above a stack of row
+ * cards, each card carrying an avatar, the name, the parent's contact details
+ * and the classes the student belongs to. Every colour comes from a token in
+ * index.css; the only literal colours are the ones stored on a class row, which
+ * are data rather than styling.
+ *
+ * Behaviour is untouched — same query keys, same mutations, same Arabic.
+ */
+
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, Users } from "lucide-react";
+
 import { api, buildQuery, errorMessage } from "../api/client";
 import type { ClassGroup, Student, StudentInput } from "../api/types";
 import {
   Badge,
   Button,
+  Card,
   ConfirmButton,
   EmptyState,
   Input,
@@ -14,6 +29,7 @@ import {
   PageHeader,
   Select,
   Textarea,
+  cn,
 } from "../components/ui";
 import { arNum } from "../lib/format";
 
@@ -72,6 +88,103 @@ function toInput(form: StudentForm, previous?: Student): StudentInput {
   if (notes !== undefined) body.notes = notes;
   return body;
 }
+
+/* ────────────────────────────── small pieces ──────────────────────────── */
+
+/** A failure the teacher has to read: tinted, never a bare red sentence. */
+function ErrorNote({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold text-[var(--absent-ink)]">
+      {children}
+    </p>
+  );
+}
+
+/** The first letter of the name in a --brand-soft disc. */
+function Avatar({ name, className }: { name: string; className?: string }) {
+  const letter = name.trim().charAt(0) || "؟";
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--brand-soft)] text-base font-bold text-[var(--brand-ink)]",
+        className,
+      )}
+    >
+      {letter}
+    </span>
+  );
+}
+
+/**
+ * A stored class colour reaches CSS as an inline style, so it is checked before
+ * it gets there: anything that is not a plain 6-digit hex falls back to the
+ * brand accent rather than silently painting `transparent`.
+ */
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
+
+function chipColor(color?: string): string {
+  return HEX6.test(color ?? "") ? (color as string) : "var(--brand)";
+}
+
+/** The same colour at 18% (0x2e), which is a tint every engine understands. */
+function chipTint(color?: string): string {
+  return HEX6.test(color ?? "") ? `${color}2e` : "var(--brand-soft)";
+}
+
+/**
+ * A class chip. The class's own colour is data, so it is used as a soft tint
+ * plus a dot rather than a solid fill — an arbitrarily light or dark stored
+ * colour can never swallow the label. The name is always printed, so the
+ * colour never carries the meaning alone.
+ */
+function ClassChip({ name, color }: { name: string; color?: string }) {
+  return (
+    <span
+      className="inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold text-[var(--ink)]"
+      style={{ backgroundColor: chipTint(color) }}
+    >
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: chipColor(color) }}
+      />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
+/** A checkbox that reads as a chip: --surface-2 idle, --brand-soft when on. */
+function CheckToggle({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex min-h-[46px] cursor-pointer select-none items-center gap-2.5 self-end rounded-2xl border px-4 text-sm font-semibold transition-colors duration-150",
+        checked
+          ? "border-[var(--brand)] bg-[var(--brand-soft)] text-[var(--brand-ink)]"
+          : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--ink-2)] hover:border-[var(--border-strong)]",
+      )}
+    >
+      <input
+        type="checkbox"
+        className="h-4 w-4 shrink-0 accent-[var(--brand)]"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="text-start">{children}</span>
+    </label>
+  );
+}
+
+/* ─────────────────────────────── the page ─────────────────────────────── */
 
 export function Students() {
   const queryClient = useQueryClient();
@@ -155,183 +268,168 @@ export function Students() {
     save.mutate({ id: form.id, body: toInput(form, editing) });
   };
 
+  const openNew = () => {
+    setFormError("");
+    setForm({ ...EMPTY_FORM });
+  };
+
   return (
     <div>
       <PageHeader
         title="الطلاب"
         subtitle={`${arNum(rows.length)} طالب في القائمة الحالية`}
         actions={
-          <Button
-            onClick={() => {
-              setFormError("");
-              setForm({ ...EMPTY_FORM });
-            }}
-          >
+          <Button onClick={openNew}>
+            <Plus className="h-4 w-4" aria-hidden />
             طالب جديد
           </Button>
         }
       />
 
       <div className="space-y-6">
-        <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-3">
-          <Input
-            label="بحث"
-            placeholder="اسم الطالب أو ولي الأمر أو الهاتف"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <Select
-            label="المجموعة"
-            value={classId}
-            onChange={(e) => setClassId(e.target.value)}
-          >
-            <option value="">كل المجموعات</option>
-            {(classes.data ?? []).map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.name}
-              </option>
-            ))}
-          </Select>
-          <label className="flex cursor-pointer items-center gap-2 self-end rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors has-[:checked]:border-blue-300 has-[:checked]:bg-blue-50">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-blue-600"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
+        {/* ── filters: one row above the list ─────────────────────────── */}
+        <Card>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_16rem_auto]">
+            <Input
+              label="بحث"
+              placeholder="اسم الطالب أو ولي الأمر أو الهاتف"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
             />
-            إظهار الطلاب غير النشطين
-          </label>
-        </div>
+            <Select label="المجموعة" value={classId} onChange={(e) => setClassId(e.target.value)}>
+              <option value="">كل المجموعات</option>
+              {(classes.data ?? []).map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </Select>
+            <CheckToggle checked={showInactive} onChange={setShowInactive}>
+              إظهار غير النشطين
+            </CheckToggle>
+          </div>
+        </Card>
 
-        {remove.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(remove.error)}
-          </p>
-        ) : null}
+        {remove.isError ? <ErrorNote>{errorMessage(remove.error)}</ErrorNote> : null}
 
         {students.isLoading ? (
-          <LoadingBlock />
+          <Card bodyClassName="p-0">
+            <LoadingBlock label="جارٍ تحميل الطلاب…" />
+          </Card>
         ) : students.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(students.error)}
-          </p>
+          <ErrorNote>{errorMessage(students.error)}</ErrorNote>
         ) : rows.length === 0 ? (
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <Card bodyClassName="p-0">
             <EmptyState
+              icon={<Users className="h-6 w-6" aria-hidden />}
               title="لا يوجد طلاب"
               hint="أضف أول طالب لتبدأ تسجيل الحضور وإرسال التنبيهات لأولياء الأمور."
               action={
-                <Button
-                  onClick={() => {
-                    setFormError("");
-                    setForm({ ...EMPTY_FORM });
-                  }}
-                >
+                <Button onClick={openNew}>
+                  <Plus className="h-4 w-4" aria-hidden />
                   طالب جديد
                 </Button>
               }
             />
-          </div>
+          </Card>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <ul className="space-y-3">
             {rows.map((student) => {
               const chips = student.classes ?? [];
               const shared = sharedPhones.has((student.parentPhone ?? "").trim());
               return (
-                <article
-                  key={student.id}
-                  className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                <li key={student.id}>
+                  <article className="elev flex flex-col gap-4 rounded-[20px] border border-[var(--border)] bg-[var(--surface)] p-5 transition-colors duration-150 hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] md:flex-row md:items-center md:gap-5 md:p-6">
+                    <div className="flex min-w-0 flex-1 items-start gap-3.5">
+                      <Avatar name={student.name} />
+
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            to={`/students/${student.id}`}
+                            className="truncate text-base font-semibold text-[var(--ink)] transition-colors duration-150 hover:text-[var(--brand-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+                          >
+                            {student.name}
+                          </Link>
+                          {student.isActive === false ? <Badge tone="gray">غير نشط</Badge> : null}
+                          {shared ? <Badge tone="amber">رقم مشترك</Badge> : null}
+                        </div>
+
+                        <p className="truncate text-xs text-[var(--ink-3)]">{student.gradeLevel}</p>
+
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--ink-2)]">
+                          <span className="truncate">{student.parentName}</span>
+                          <span aria-hidden className="text-[var(--ink-3)]">
+                            ·
+                          </span>
+                          <span dir="ltr" className="tabular-nums">
+                            {student.parentPhone}
+                          </span>
+                          {student.altPhone ? (
+                            <>
+                              <span aria-hidden className="text-[var(--ink-3)]">
+                                ·
+                              </span>
+                              <span dir="ltr" className="tabular-nums text-[var(--ink-3)]">
+                                {student.altPhone}
+                              </span>
+                            </>
+                          ) : null}
+                        </div>
+
+                        {chips.length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {chips.map((chip) => (
+                              <ClassChip key={chip.id} name={chip.name} color={chip.color} />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-[var(--ink-3)]">غير مسجّل في أي مجموعة</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4 md:shrink-0 md:flex-nowrap md:border-0 md:pt-0">
                       <Link
                         to={`/students/${student.id}`}
-                        className="block truncate text-base font-bold text-slate-900 hover:text-blue-700"
+                        className="inline-flex h-9 select-none items-center rounded-2xl px-3.5 text-sm font-semibold text-[var(--brand-ink)] transition-colors duration-150 hover:bg-[var(--brand-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
                       >
-                        {student.name}
+                        التفاصيل
                       </Link>
-                      <p className="truncate text-sm text-slate-500">{student.gradeLevel}</p>
-                    </div>
-                    {student.isActive === false ? <Badge tone="gray">غير نشط</Badge> : null}
-                  </div>
-
-                  <div className="space-y-1 text-sm">
-                    <p className="truncate text-slate-700">
-                      <span className="text-slate-500">ولي الأمر: </span>
-                      {student.parentName}
-                    </p>
-                    <p className="flex flex-wrap items-center gap-2 text-slate-700">
-                      <span className="text-slate-500">الهاتف:</span>
-                      <span dir="ltr" className="font-mono">
-                        {student.parentPhone}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setFormError("");
+                          setForm({
+                            id: student.id,
+                            name: student.name ?? "",
+                            parentName: student.parentName ?? "",
+                            parentPhone: student.parentPhone ?? "",
+                            altPhone: student.altPhone ?? "",
+                            gradeLevel: student.gradeLevel ?? "",
+                            notes: student.notes ?? "",
+                            isActive: student.isActive !== false,
+                          });
+                        }}
+                      >
+                        تعديل
+                      </Button>
+                      <span className="ms-auto md:ms-0">
+                        <ConfirmButton size="sm" onConfirm={() => remove.mutate(student.id)}>
+                          حذف
+                        </ConfirmButton>
                       </span>
-                      {shared ? <Badge tone="amber">رقم مشترك</Badge> : null}
-                    </p>
-                    {student.altPhone ? (
-                      <p className="flex items-center gap-2 text-slate-700">
-                        <span className="text-slate-500">رقم بديل:</span>
-                        <span dir="ltr" className="font-mono">
-                          {student.altPhone}
-                        </span>
-                      </p>
-                    ) : null}
-                  </div>
-
-                  {chips.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {chips.map((chip) => (
-                        <span
-                          key={chip.id}
-                          className="rounded-full px-2.5 py-1 text-xs font-semibold text-white"
-                          style={{ backgroundColor: chip.color || "#2563eb" }}
-                        >
-                          {chip.name}
-                        </span>
-                      ))}
                     </div>
-                  ) : (
-                    <p className="text-xs text-slate-400">غير مسجّل في أي مجموعة</p>
-                  )}
-
-                  <div className="mt-auto flex items-center gap-2 border-t border-slate-100 pt-3">
-                    <Link
-                      to={`/students/${student.id}`}
-                      className="rounded-xl px-3 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-50"
-                    >
-                      التفاصيل
-                    </Link>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setFormError("");
-                        setForm({
-                          id: student.id,
-                          name: student.name ?? "",
-                          parentName: student.parentName ?? "",
-                          parentPhone: student.parentPhone ?? "",
-                          altPhone: student.altPhone ?? "",
-                          gradeLevel: student.gradeLevel ?? "",
-                          notes: student.notes ?? "",
-                          isActive: student.isActive !== false,
-                        });
-                      }}
-                    >
-                      تعديل
-                    </Button>
-                    <span className="ms-auto">
-                      <ConfirmButton size="sm" onConfirm={() => remove.mutate(student.id)}>
-                        حذف
-                      </ConfirmButton>
-                    </span>
-                  </div>
-                </article>
+                  </article>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
       </div>
 
+      {/* ── add / edit ──────────────────────────────────────────────────── */}
       <Modal
         open={form !== null}
         onClose={() => setForm(null)}
@@ -369,25 +467,26 @@ export function Students() {
               <Input
                 label="هاتف ولي الأمر"
                 dir="ltr"
+                inputMode="tel"
                 placeholder="01001234567"
+                className="tabular-nums"
                 value={form.parentPhone}
                 onChange={(e) => setForm({ ...form, parentPhone: e.target.value })}
               />
               <Input
                 label="رقم بديل (اختياري)"
                 dir="ltr"
+                inputMode="tel"
+                className="tabular-nums"
                 value={form.altPhone}
                 onChange={(e) => setForm({ ...form, altPhone: e.target.value })}
               />
-              <label className="flex cursor-pointer items-center gap-2 self-end rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors has-[:checked]:border-emerald-300 has-[:checked]:bg-emerald-50">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-emerald-600"
-                  checked={form.isActive}
-                  onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-                />
+              <CheckToggle
+                checked={form.isActive}
+                onChange={(next) => setForm({ ...form, isActive: next })}
+              >
                 طالب نشط
-              </label>
+              </CheckToggle>
             </div>
 
             <datalist id="grade-levels">
@@ -403,15 +502,11 @@ export function Students() {
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
             />
 
-            <p className="text-xs text-slate-500">
+            <p className="text-start text-xs text-[var(--ink-3)]">
               يُحفَظ رقم الهاتف بالصيغة الدولية تلقائياً، فيمكن كتابته بأي شكل مألوف.
             </p>
 
-            {formError ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
-                {formError}
-              </p>
-            ) : null}
+            {formError ? <ErrorNote>{formError}</ErrorNote> : null}
           </div>
         ) : null}
       </Modal>

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The round adaptive icon. Identical to ic_launcher.xml on purpose: the layers
+  are already mask-agnostic, so the round variant needs no separate artwork.
+  See ic_launcher.xml for why the background is a colour and not the white
+  @mipmap/ic_launcher_background raster.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Solid blue rather than @mipmap/ic_launcher_background (a white PNG):
-         see res/values/ic_launcher_background.xml for why. -->
     <background android:drawable="@color/ic_launcher_background" />
     <foreground>
         <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.7%" />

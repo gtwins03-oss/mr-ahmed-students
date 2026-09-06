@@ -1,7 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <!--
-  The launcher label and the title bar. Arabic on purpose: this is what shows
-  under the icon on the teacher's home screen and in the app switcher.
+  The launcher label and the title bar — the product name, "Mr Ahmed Ibrahim
+  Students". This is what shows under the icon on the teacher's home screen and
+  in the app switcher; the Arabic supporting line lives inside the app UI, not
+  on the launcher.
 
   `app_name` and `title_activity_main` are seeded from `appName` in
   web/capacitor.config.ts when the platform is first added, so change the name
@@ -10,8 +12,8 @@
   in sync with the applicationId in app/build.gradle.
 -->
 <resources>
-    <string name="app_name">إدارة الطلاب</string>
-    <string name="title_activity_main">إدارة الطلاب</string>
+    <string name="app_name">Mr Ahmed Ibrahim Students</string>
+    <string name="title_activity_main">Mr Ahmed Ibrahim Students</string>
     <string name="package_name">com.mrahmed.students</string>
     <string name="custom_url_scheme">com.mrahmed.students</string>
 </resources>

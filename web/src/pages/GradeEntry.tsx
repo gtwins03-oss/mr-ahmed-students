@@ -10,9 +10,13 @@
  * is excluded from the average, and never queues a low-grade alert. That
  * distinction is the whole point of this screen, so it is visible at every
  * level — placeholder, row tint and badge.
+ *
+ * On a phone the save control lives in a sticky bar pinned above the tab bar,
+ * carrying the count of unsaved edits: the teacher scrolling row twenty-eight
+ * of thirty must never have to scroll back up to find it.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -24,7 +28,16 @@ import type {
   SaveResult,
   Settings,
 } from "../api/types";
-import { Badge, Button, Card, EmptyState, LoadingBlock, PageHeader } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  LoadingBlock,
+  PageHeader,
+  StatTile,
+  cn,
+} from "../components/ui";
 import { ASSESSMENT_TYPE_AR, arDate, arNum, arPercent } from "../lib/format";
 
 /** One row of the grid, kept as raw text so a half-typed "1" is never coerced. */
@@ -52,15 +65,35 @@ function toDraft(entries: AssessmentEntry[]): Draft {
   return draft;
 }
 
+/** True when the two rows carry the same value; blank and whitespace match. */
+function rowsEqual(a: RowDraft, b: RowDraft): boolean {
+  return a.score.trim() === b.score.trim() && a.note.trim() === b.note.trim();
+}
+
 /** Order-independent comparison; blank and whitespace count as the same value. */
 function draftsEqual(a: Draft, b: Draft): boolean {
   for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    const left = a[key] ?? EMPTY_ROW;
-    const right = b[key] ?? EMPTY_ROW;
-    if (left.score.trim() !== right.score.trim()) return false;
-    if (left.note.trim() !== right.note.trim()) return false;
+    if (!rowsEqual(a[key] ?? EMPTY_ROW, b[key] ?? EMPTY_ROW)) return false;
   }
   return true;
+}
+
+/** How many students have an edit waiting — the number the sticky bar prints. */
+function countChanges(a: Draft, b: Draft): number {
+  let changed = 0;
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (!rowsEqual(a[key] ?? EMPTY_ROW, b[key] ?? EMPTY_ROW)) changed += 1;
+  }
+  return changed;
+}
+
+/** ١ تعديل · تعديلان · ٣ تعديلات · ١١ تعديلاً */
+function changesLabel(count: number): string {
+  if (count === 0) return "لا توجد تعديلات غير محفوظة";
+  if (count === 1) return "تعديل واحد غير محفوظ";
+  if (count === 2) return "تعديلان غير محفوظان";
+  if (count <= 10) return `${arNum(count)} تعديلات غير محفوظة`;
+  return `${arNum(count)} تعديلاً غير محفوظ`;
 }
 
 /** "" → null ("did not sit the test"); anything unparseable → NaN, caught by the validator. */
@@ -79,6 +112,9 @@ function parseScore(raw: string): number | null {
  * react-router's `useBlocker` needs a data router and this app mounts a plain
  * <BrowserRouter>. Capturing on `document` runs before React's root listener,
  * so cancelling there stops the navigation entirely.
+ *
+ * This is why «رجوع للاختبارات» stays an <a>: routing it through `navigate()`
+ * would slip straight past the guard.
  */
 function useUnsavedChangesGuard(active: boolean): void {
   useEffect(() => {
@@ -115,27 +151,31 @@ function useUnsavedChangesGuard(active: boolean): void {
   }, [active]);
 }
 
-/* ──────────────────────────────── stats ───────────────────────────────── */
+/* ───────────────────────────── small pieces ───────────────────────────── */
 
-function StatTile({
-  label,
-  value,
-  tone = "slate",
+/** A tinted block. Errors, warnings and confirmations all use this shape. */
+function Note({
+  tone,
+  children,
 }: {
-  label: string;
-  value: string;
-  tone?: "slate" | "blue" | "rose" | "amber";
+  tone: "brand" | "late" | "absent";
+  children: ReactNode;
 }) {
-  const toneClass = {
-    slate: "text-slate-900",
-    blue: "text-blue-700",
-    rose: "text-rose-700",
-    amber: "text-amber-600",
+  const skin = {
+    brand: "bg-[var(--brand-soft)] text-[var(--ink)]",
+    late: "bg-[var(--late-soft)] text-[var(--late-ink)]",
+    absent: "bg-[var(--absent-soft)] text-[var(--absent-ink)]",
   }[tone];
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className={`text-2xl font-extrabold tabular-nums ${toneClass}`}>{value}</p>
+    <div
+      role={tone === "absent" ? "alert" : "status"}
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3 text-start text-sm font-semibold",
+        skin,
+      )}
+    >
+      {children}
     </div>
   );
 }
@@ -206,6 +246,7 @@ export function GradeEntry() {
   const baseline = useMemo(() => toDraft(entries), [entries]);
 
   const dirty = useMemo(() => !draftsEqual(baseline, draft), [baseline, draft]);
+  const dirtyCount = useMemo(() => countChanges(baseline, draft), [baseline, draft]);
 
   useUnsavedChangesGuard(dirty);
 
@@ -305,7 +346,7 @@ export function GradeEntry() {
     return (
       <>
         <PageHeader title="إدخال الدرجات" />
-        <Card>
+        <Card bodyClassName="p-0">
           <EmptyState
             title="لم يتم تحديد الاختبار"
             hint="اختر اختباراً من صفحة الدرجات لإدخال درجات طلابه."
@@ -332,6 +373,7 @@ export function GradeEntry() {
     : undefined;
 
   const saveDisabled = save.isPending || !dirty || summary.invalid > 0 || entries.length === 0;
+  const saveLabel = save.isPending ? "جارٍ الحفظ…" : "حفظ الدرجات";
 
   return (
     <div>
@@ -340,22 +382,29 @@ export function GradeEntry() {
         subtitle={subtitle}
         actions={
           <>
+            {/* Stays an <a> on purpose — see useUnsavedChangesGuard. */}
             <Link
               to="/grades"
-              className="rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100"
+              className={cn(
+                "inline-flex h-11 select-none items-center justify-center rounded-2xl px-5 text-sm font-semibold",
+                "text-[var(--ink-2)] transition-colors duration-150 hover:bg-[var(--surface-2)] hover:text-[var(--ink)]",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] sm:text-base",
+              )}
             >
               رجوع للاختبارات
             </Link>
-            <Button onClick={submit} disabled={saveDisabled}>
-              {save.isPending ? "جارٍ الحفظ…" : "حفظ الدرجات"}
+            {/* max-md: rather than hidden — Button already carries
+                `inline-flex`, which sorts after `.hidden` and would win. */}
+            <Button onClick={submit} disabled={saveDisabled} className="max-md:hidden">
+              {saveLabel}
             </Button>
           </>
         }
       />
 
-      <div className="space-y-5">
+      <div className="space-y-6">
         {notice ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+          <Note tone="brand">
             <span>
               تم حفظ {arNum(notice.saved)} درجة
               {notice.queued > 0
@@ -363,31 +412,36 @@ export function GradeEntry() {
                 : " · لم تُضَف أي رسائل تنبيه"}
             </span>
             {notice.queued > 0 ? (
-              <Link to="/messages" className="font-bold underline underline-offset-4">
+              <Link
+                to="/messages"
+                className="font-semibold text-[var(--brand-ink)] underline underline-offset-4"
+              >
                 فتح قائمة الإرسال
               </Link>
             ) : null}
-          </div>
+          </Note>
         ) : null}
 
         {dirty ? (
-          <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-900">
-            توجد تعديلات غير محفوظة — اضغط «حفظ الدرجات» قبل مغادرة الصفحة.
-          </p>
+          <Note tone="late">
+            <span>توجد تعديلات غير محفوظة — اضغط «حفظ الدرجات» قبل مغادرة الصفحة.</span>
+          </Note>
         ) : null}
 
         {formError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {formError}
-          </p>
+          <Note tone="absent">
+            <span>{formError}</span>
+          </Note>
         ) : null}
 
         {detail.isLoading ? (
-          <LoadingBlock />
+          <Card bodyClassName="p-0">
+            <LoadingBlock />
+          </Card>
         ) : detail.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(detail.error)}
-          </p>
+          <Note tone="absent">
+            <span>{errorMessage(detail.error)}</span>
+          </Note>
         ) : entries.length === 0 ? (
           <Card bodyClassName="p-0">
             <EmptyState
@@ -402,31 +456,43 @@ export function GradeEntry() {
           </Card>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-              <StatTile label="عدد الطلاب" value={arNum(entries.length)} />
-              <StatTile label="تم رصدها" value={arNum(summary.graded)} tone="blue" />
-              <StatTile label="لم يؤدِّ الاختبار" value={arNum(summary.missed)} tone="amber" />
+            {/* The live picture of the sheet, recomputed on every keystroke. */}
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               <StatTile
                 label="متوسط المجموعة"
                 value={summary.average === null ? "—" : arPercent(summary.average)}
+                meter={summary.average ?? 0}
+                hint={`من ${arNum(summary.graded)} درجة مرصودة`}
+              />
+              <StatTile
+                label="تم رصدها"
+                value={arNum(summary.graded)}
+                hint={`من ${arNum(entries.length)} طالباً`}
+              />
+              <StatTile
+                label="لم يؤدِّ الاختبار"
+                value={arNum(summary.missed)}
+                hint="لا تدخل في المتوسط"
               />
               <StatTile
                 label={`تحت ${arNum(threshold)}٪`}
                 value={arNum(summary.low)}
-                tone="rose"
+                hint="تُرسَل لهم تنبيهات المستوى"
               />
             </div>
 
             <Card bodyClassName="p-0">
-              <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-500">
-                <span className="w-8 text-center">#</span>
-                <span className="flex-1 text-start">الطالب</span>
-                <span className="w-24 text-center">الدرجة</span>
-                <span className="w-28 text-center">النسبة</span>
-                <span className="hidden w-48 text-start md:block">ملاحظة</span>
+              {/* Column headings only make sense once the row stops wrapping. */}
+              <div className="hidden items-center gap-3 border-b border-[var(--border)] px-5 py-3 text-xs font-semibold text-[var(--ink-3)] md:flex">
+                <span className="flex-1 text-start ps-9">الطالب</span>
+                <span className="w-28 text-center">الدرجة</span>
+                <span className="w-32 text-center">النسبة</span>
+                {/* The sidebar eats 264px, so the note only earns its own
+                    column once the viewport can actually spare one. */}
+                <span className="hidden w-40 text-start lg:block xl:w-52">ملاحظة</span>
               </div>
 
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-[var(--border)]">
                 {entries.map((entry, index) => {
                   const row = draft[entry.studentId] ?? EMPTY_ROW;
                   const score = parseScore(row.score);
@@ -435,25 +501,30 @@ export function GradeEntry() {
                     score !== null &&
                     (Number.isNaN(score) || score < 0 || (maxScore > 0 && score > maxScore));
                   const percentage =
-                    !missed && !invalid && maxScore > 0 ? ((score as number) / maxScore) * 100 : null;
+                    !missed && !invalid && maxScore > 0
+                      ? ((score as number) / maxScore) * 100
+                      : null;
 
                   return (
                     <li
                       key={entry.studentId}
-                      className={`flex items-center gap-3 px-4 py-2.5 ${
-                        missed ? "bg-slate-50/70" : "bg-white"
-                      }`}
+                      className={cn(
+                        "flex flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-3 sm:px-5",
+                        // A blank score is a real state, not an empty cell.
+                        missed && "bg-[var(--surface-2)]",
+                      )}
                     >
-                      <span className="w-8 text-center text-sm tabular-nums text-slate-400">
-                        {arNum(index + 1)}
-                      </span>
-
-                      <Link
-                        to={`/students/${entry.studentId}`}
-                        className="min-w-0 flex-1 truncate text-start font-semibold text-slate-800 hover:text-blue-700"
-                      >
-                        {entry.name}
-                      </Link>
+                      <div className="flex min-w-0 basis-full items-center gap-3 md:flex-1 md:basis-auto">
+                        <span className="w-6 shrink-0 text-center text-xs font-semibold tabular-nums text-[var(--ink-3)]">
+                          {arNum(index + 1)}
+                        </span>
+                        <Link
+                          to={`/students/${entry.studentId}`}
+                          className="min-w-0 flex-1 truncate text-start text-sm font-semibold text-[var(--ink)] transition-colors duration-150 hover:text-[var(--brand-ink)]"
+                        >
+                          {entry.name}
+                        </Link>
+                      </div>
 
                       <input
                         ref={(el) => {
@@ -461,6 +532,7 @@ export function GradeEntry() {
                         }}
                         type="number"
                         inputMode="decimal"
+                        dir="ltr"
                         min={0}
                         max={maxScore > 0 ? maxScore : undefined}
                         step="any"
@@ -475,14 +547,16 @@ export function GradeEntry() {
                           e.preventDefault();
                           focusNext(index);
                         }}
-                        className={`w-24 rounded-xl border px-2 py-2 text-center text-base font-bold tabular-nums shadow-sm transition-colors focus:outline-none focus:ring-2 ${
+                        className={cn(
+                          "h-11 w-24 shrink-0 rounded-2xl border bg-[var(--surface-2)] px-2 text-center text-lg font-bold tabular-nums text-[var(--ink)]",
+                          "transition-colors duration-150 placeholder:font-normal placeholder:text-[var(--ink-3)] focus:outline-none focus:ring-2 sm:w-28",
                           invalid
-                            ? "border-rose-400 bg-rose-50 text-rose-700 focus:border-rose-500 focus:ring-rose-500/30"
-                            : "border-slate-300 focus:border-blue-500 focus:ring-blue-500/30"
-                        }`}
+                            ? "border-[var(--absent)] focus:border-[var(--absent)] focus:ring-[var(--absent-soft)]"
+                            : "border-[var(--border)] hover:border-[var(--border-strong)] focus:border-[var(--brand)] focus:ring-[var(--brand-soft)]",
+                        )}
                       />
 
-                      <span className="flex w-28 justify-center">
+                      <span className="flex min-w-0 flex-1 justify-start md:w-32 md:flex-none md:justify-center">
                         {invalid ? (
                           <Badge tone="red">خارج النطاق</Badge>
                         ) : missed ? (
@@ -500,23 +574,52 @@ export function GradeEntry() {
                         aria-label={`ملاحظة على درجة ${entry.name}`}
                         value={row.note}
                         onChange={(e) => setRow(entry.studentId, { note: e.target.value })}
-                        className="hidden w-48 rounded-xl border border-slate-300 px-2 py-2 text-start text-sm shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 md:block"
+                        className={cn(
+                          "hidden h-11 w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 text-start text-sm text-[var(--ink)]",
+                          "transition-colors duration-150 placeholder:text-[var(--ink-3)] hover:border-[var(--border-strong)]",
+                          "focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-soft)]",
+                          // md is only ~440px of content next to the sidebar:
+                          // the note drops to its own full-width line there and
+                          // rejoins the row as a real column at lg.
+                          "md:block md:basis-full lg:w-40 lg:basis-auto xl:w-52",
+                        )}
                       />
                     </li>
                   );
                 })}
               </ul>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3">
-                <p className="max-w-xl text-start text-xs leading-6 text-slate-500">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-4 py-4 sm:px-5">
+                <p className="max-w-xl text-start text-xs leading-6 text-[var(--ink-3)]">
                   اترك الخانة فارغة لمن لم يؤدِّ الاختبار — لا تُحتسب في المتوسط ولا تُرسَل عنها
                   تنبيهات، وهي مختلفة تماماً عن الصفر. اضغط Enter للانتقال إلى الطالب التالي.
                 </p>
-                <Button onClick={submit} disabled={saveDisabled}>
-                  {save.isPending ? "جارٍ الحفظ…" : "حفظ الدرجات"}
+                {/* max-md: rather than hidden — Button already carries
+                    `inline-flex`, which sorts after `.hidden` and would win. */}
+                <Button onClick={submit} disabled={saveDisabled} className="max-md:hidden">
+                  {saveLabel}
                 </Button>
               </div>
             </Card>
+
+            {/* ── Sticky save bar, phones only ───────────────────────────
+                Pinned above the bottom tab bar (56px + the home indicator),
+                so «حفظ الدرجات» is reachable from any row of the sheet. */}
+            <div className="sticky bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-20 -mt-2 bg-[var(--bg)] pb-1 pt-2 md:hidden">
+              <div className="elev flex items-center justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3">
+                <p
+                  className={cn(
+                    "min-w-0 flex-1 text-start text-xs font-semibold",
+                    dirtyCount > 0 ? "text-[var(--late-ink)]" : "text-[var(--ink-3)]",
+                  )}
+                >
+                  {changesLabel(dirtyCount)}
+                </p>
+                <Button onClick={submit} disabled={saveDisabled} className="shrink-0">
+                  {saveLabel}
+                </Button>
+              </div>
+            </div>
           </>
         )}
       </div>

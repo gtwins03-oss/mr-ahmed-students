@@ -1,8 +1,9 @@
-# نظام إدارة الطلاب والتنبيهات — Student Management & Notification System
+# Mr Ahmed Ibrahim Students — مستر أحمد إبراهيم — إدارة الطلاب
 
-A single-tutor system for managing students, classes, attendance, grades, and automated
-Arabic WhatsApp/SMS alerts to parents. Arabic RTL front-end, JWT auth, two roles
-(OWNER / ASSISTANT), full audit trail, and an Android APK wrapper.
+**Mr Ahmed Ibrahim Students** is a single-tutor system for managing students, classes,
+attendance, grades, and automated Arabic WhatsApp/SMS alerts to parents. Arabic RTL
+front-end, JWT auth, two roles (OWNER / ASSISTANT), full audit trail, and an Android
+APK wrapper.
 
 ## التشغيل السريع
 

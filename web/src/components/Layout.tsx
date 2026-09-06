@@ -2,15 +2,16 @@
  * App shell.
  *
  * RTL note: `dir="rtl"` is set on <html>, so inline-start is the *right* edge.
- * The sidebar is therefore anchored with `start-0` and the content is pushed
- * away from it with `ms-64` — no `right-`/`left-` utilities anywhere.
+ * The sidebar is therefore anchored with `start-0` — it sits on the right —
+ * and the content is pushed away from it with `ms-[264px]`. No `right-`/
+ * `left-` utilities anywhere.
  *
- * Under `md` the sidebar becomes a bottom tab bar, because the teacher uses
- * this on a phone while standing in front of a class. The bottom bar carries
- * the eight daily screens only; the owner's two administrative screens live in
- * the sidebar on desktop and in the account menu on mobile, so the tab bar
- * never shrinks below a usable tap target. Items whose label does not survive
- * a column that narrow carry a `shortLabel`.
+ * Under `md` the sidebar becomes a five-item bottom tab bar, because the
+ * teacher uses this on a phone while standing in front of a class. Four
+ * destinations are the day's work; everything else — including the owner's two
+ * administrative screens — lives behind «المزيد», which opens a sheet. That
+ * keeps every tab a full-sized tap target instead of squeezing ten columns
+ * into a phone's width.
  *
  * This is also where the app's connection story is mounted: `useRealtimeSync()`
  * opens the socket exactly once, and `<ConnectionBar />` is the only thing that
@@ -18,7 +19,7 @@
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -27,6 +28,7 @@ import {
   History,
   LayoutDashboard,
   LogOut,
+  MoreHorizontal,
   QrCode,
   Send,
   Settings as SettingsIcon,
@@ -41,8 +43,10 @@ import type { Message, WhatsappStatus } from "../api/types";
 import { arNum } from "../lib/format";
 import { useAuth } from "../lib/auth";
 import { useRealtimeSync } from "../lib/socket";
+import { BRAND_SUBTITLE, LogoLockup } from "./Brand";
 import { ConnectionBar } from "./ConnectionBar";
-import { cn } from "./ui";
+import { ThemeToggle } from "./ThemeToggle";
+import { Sheet, cn } from "./ui";
 
 interface NavItem {
   to: string;
@@ -54,25 +58,37 @@ interface NavItem {
   showsPendingBadge?: boolean;
   /** Shows a green dot while the WhatsApp sending account is linked. */
   showsLinkedDot?: boolean;
-  /** Bottom-bar label, where a column is barely wider than the icon. */
-  shortLabel?: string;
 }
 
+const DASHBOARD: NavItem = { to: "/", label: "لوحة التحكم", icon: LayoutDashboard, end: true };
+const STUDENTS: NavItem = { to: "/students", label: "الطلاب", icon: Users };
+const CLASSES: NavItem = { to: "/classes", label: "المجموعات", icon: BookOpen };
+const ATTENDANCE: NavItem = { to: "/attendance", label: "الحضور", icon: ClipboardCheck };
+const GRADES: NavItem = { to: "/grades", label: "الدرجات", icon: GraduationCap };
+const MESSAGES: NavItem = {
+  to: "/messages",
+  label: "قائمة الإرسال",
+  icon: Send,
+  showsPendingBadge: true,
+};
+const WHATSAPP: NavItem = {
+  to: "/whatsapp",
+  label: "ربط واتساب",
+  icon: QrCode,
+  showsLinkedDot: true,
+};
+const SETTINGS: NavItem = { to: "/settings", label: "الإعدادات", icon: SettingsIcon };
+
+/** Every destination, in sidebar order. */
 const NAV_ITEMS: NavItem[] = [
-  { to: "/", label: "لوحة التحكم", icon: LayoutDashboard, end: true },
-  { to: "/students", label: "الطلاب", icon: Users },
-  { to: "/classes", label: "المجموعات", icon: BookOpen },
-  { to: "/attendance", label: "الحضور", icon: ClipboardCheck },
-  { to: "/grades", label: "الدرجات", icon: GraduationCap },
-  { to: "/messages", label: "قائمة الإرسال", icon: Send, showsPendingBadge: true },
-  {
-    to: "/whatsapp",
-    label: "ربط واتساب",
-    shortLabel: "واتساب",
-    icon: QrCode,
-    showsLinkedDot: true,
-  },
-  { to: "/settings", label: "الإعدادات", icon: SettingsIcon },
+  DASHBOARD,
+  STUDENTS,
+  CLASSES,
+  ATTENDANCE,
+  GRADES,
+  MESSAGES,
+  WHATSAPP,
+  SETTINGS,
 ];
 
 /**
@@ -85,6 +101,12 @@ const OWNER_NAV_ITEMS: NavItem[] = [
   { to: "/audit", label: "سجل النشاط", icon: History },
   { to: "/users", label: "المستخدمون", icon: UserCog },
 ];
+
+/** The four tabs the phone gets. The fifth column is «المزيد». */
+const TAB_ITEMS: NavItem[] = [DASHBOARD, ATTENDANCE, GRADES, MESSAGES];
+
+/** Everything the bottom bar does not carry, in the order the sheet lists it. */
+const MORE_ITEMS: NavItem[] = [STUDENTS, CLASSES, WHATSAPP, SETTINGS];
 
 /** Polls the outbox so the teacher always sees how many parents are waiting. */
 function usePendingCount(): number {
@@ -110,6 +132,8 @@ function useWhatsappLinked(): boolean {
   return data?.state === "AUTHORIZED";
 }
 
+/* ──────────────────────────────── badges ──────────────────────────────── */
+
 /** Green = "الإرسال التلقائي شغّال"; its absence says nothing is broken. */
 function LinkedDot({ className }: { className?: string }) {
   return (
@@ -117,7 +141,7 @@ function LinkedDot({ className }: { className?: string }) {
       aria-label="واتساب مرتبط"
       title="واتساب مرتبط — الإرسال التلقائي يعمل"
       className={cn(
-        "inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 ring-2 ring-white",
+        "inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--present)] ring-2 ring-[var(--surface)]",
         className,
       )}
     />
@@ -129,7 +153,7 @@ function PendingPill({ count, className }: { count: number; className?: string }
     <span
       aria-label={`${count} رسالة بانتظار الإرسال`}
       className={cn(
-        "inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1.5 text-xs font-bold leading-5 text-white shadow-sm",
+        "inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--absent)] px-1.5 text-xs font-bold leading-5 text-white",
         className,
       )}
     >
@@ -138,146 +162,112 @@ function PendingPill({ count, className }: { count: number; className?: string }
   );
 }
 
-function BrandMark() {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
-        <GraduationCap className="h-5 w-5" />
-      </span>
-      <span className="text-base font-bold text-slate-900">نظام إدارة الطلاب</span>
-    </div>
-  );
+/* ─────────────────────────────── nav rows ─────────────────────────────── */
+
+interface RowProps {
+  item: NavItem;
+  pendingCount: number;
+  whatsappLinked: boolean;
+  onNavigate?: () => void;
 }
 
-const NAV_LINK = (isActive: boolean) =>
-  cn(
-    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors",
-    isActive ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-  );
-
-/** Account block at the foot of the desktop sidebar. */
-function AccountPanel({
-  name,
-  roleLabel,
-  onLogout,
-}: {
-  name: string;
-  roleLabel: string;
-  onLogout: () => void;
-}) {
+/** One line in the desktop sidebar or the «المزيد» sheet. */
+function NavRow({ item, pendingCount, whatsappLinked, onNavigate }: RowProps) {
+  const { to, label, icon: Icon, end, showsPendingBadge, showsLinkedDot } = item;
   return (
-    <div className="border-t border-slate-100 p-3">
-      <div className="flex items-center gap-2.5 px-2 py-1.5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500">
-          <User className="h-4 w-4" />
-        </span>
-        <div className="min-w-0 flex-1 text-start">
-          <p className="truncate text-sm font-bold text-slate-800">{name}</p>
-          <p className="text-xs text-slate-500">{roleLabel}</p>
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={onLogout}
-        className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-rose-50 hover:text-rose-700"
-      >
-        <LogOut className="h-5 w-5 shrink-0" />
-        <span className="flex-1 text-start">تسجيل الخروج</span>
-      </button>
-    </div>
-  );
-}
-
-/** The same actions on a phone, folded into a menu beside the brand. */
-function AccountMenu({
-  name,
-  roleLabel,
-  ownerItems,
-  onLogout,
-}: {
-  name: string;
-  roleLabel: string;
-  ownerItems: NavItem[];
-  onLogout: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="حسابي"
-        onClick={() => setOpen((v) => !v)}
-        className="flex max-w-36 items-center gap-2 rounded-xl border border-slate-200 px-2.5 py-1.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-      >
-        <User className="h-4 w-4 shrink-0 text-slate-500" />
-        <span className="truncate">{name}</span>
-      </button>
-
-      {open && (
+    <NavLink
+      to={to}
+      end={end}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        cn(
+          "relative flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-semibold transition-colors duration-150",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+          isActive
+            ? "bg-[var(--brand-soft)] text-[var(--brand)]"
+            : "text-[var(--ink-2)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]",
+        )
+      }
+    >
+      {({ isActive }) => (
         <>
-          <button
-            type="button"
-            aria-label="إغلاق القائمة"
-            onClick={() => setOpen(false)}
-            className="fixed inset-0 z-40 cursor-default"
-          />
-          <div
-            role="menu"
-            className="absolute end-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"
-          >
-            <p className="px-3 py-2 text-start text-xs text-slate-500">{roleLabel}</p>
-            {ownerItems.map(({ to, label, icon: Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                role="menuitem"
-                onClick={() => setOpen(false)}
-                className={({ isActive }) => NAV_LINK(isActive)}
-              >
-                <Icon className="h-5 w-5 shrink-0" />
-                <span className="flex-1 text-start">{label}</span>
-              </NavLink>
-            ))}
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                onLogout();
-              }}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-rose-50 hover:text-rose-700"
-            >
-              <LogOut className="h-5 w-5 shrink-0" />
-              <span className="flex-1 text-start">تسجيل الخروج</span>
-            </button>
-          </div>
+          {isActive && (
+            <span
+              aria-hidden
+              className="absolute start-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[var(--brand)]"
+            />
+          )}
+          <Icon className="h-5 w-5 shrink-0" aria-hidden />
+          <span className="flex-1 truncate text-start">{label}</span>
+          {showsPendingBadge && pendingCount > 0 && <PendingPill count={pendingCount} />}
+          {showsLinkedDot && whatsappLinked && <LinkedDot />}
         </>
       )}
+    </NavLink>
+  );
+}
+
+/**
+ * The 3px pill that marks the live tab. Centred by a full-width flex row
+ * rather than `start-1/2 + translate`, which mirrors the wrong way in RTL.
+ */
+function TabIndicator() {
+  return (
+    <span aria-hidden className="absolute inset-x-0 top-0 flex justify-center">
+      <span className="h-[3px] w-6 rounded-full bg-[var(--brand)]" />
+    </span>
+  );
+}
+
+/** Name + role, used at the foot of the sidebar and inside the sheet. */
+function AccountRow({ name, roleLabel }: { name: string; roleLabel: string }) {
+  return (
+    <div className="flex items-center gap-3 px-3 py-2">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--surface-2)] text-[var(--ink-3)]">
+        <User className="h-4 w-4" aria-hidden />
+      </span>
+      <div className="min-w-0 flex-1 text-start">
+        <p className="truncate text-sm font-semibold text-[var(--ink)]">{name}</p>
+        <p className="text-xs text-[var(--ink-3)]">{roleLabel}</p>
+      </div>
     </div>
   );
 }
+
+function LogoutRow({ onLogout }: { onLogout: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onLogout}
+      className={cn(
+        "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-semibold text-[var(--ink-2)] transition-colors duration-150",
+        "hover:bg-[var(--absent-soft)] hover:text-[var(--absent-ink)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+      )}
+    >
+      <LogOut className="h-5 w-5 shrink-0" aria-hidden />
+      <span className="flex-1 text-start">تسجيل الخروج</span>
+    </button>
+  );
+}
+
+/* ──────────────────────────────── shell ───────────────────────────────── */
 
 export function Layout({ children }: { children?: ReactNode }) {
   const pendingCount = usePendingCount();
   const whatsappLinked = useWhatsappLinked();
-  const [year] = useState(() => new Date().getFullYear());
   const { user, isOwner, logout } = useAuth();
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const [moreOpen, setMoreOpen] = useState(false);
 
   // One socket for the whole app, opened here and closed on logout.
   useRealtimeSync();
+
+  // A tap that navigates should never leave the sheet hanging over the page.
+  useEffect(() => {
+    setMoreOpen(false);
+  }, [location.pathname]);
 
   /**
    * Signing out also empties the cache. The query cache is mirrored into
@@ -290,97 +280,137 @@ export function Layout({ children }: { children?: ReactNode }) {
     queryClient.clear();
   };
 
-  const sidebarItems = isOwner ? [...NAV_ITEMS, ...OWNER_NAV_ITEMS] : NAV_ITEMS;
   const ownerItems = isOwner ? OWNER_NAV_ITEMS : [];
+  const sidebarItems = [...NAV_ITEMS, ...ownerItems];
+  const moreItems = [...MORE_ITEMS, ...ownerItems];
   const displayName = user?.name ?? "المستخدم";
   const roleLabel = isOwner ? "المالك" : "مساعد";
 
+  /** «المزيد» lights up whenever the open page lives behind it. */
+  const moreActive = moreItems.some(
+    ({ to }) => location.pathname === to || location.pathname.startsWith(`${to}/`),
+  );
+
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-[var(--bg)]">
       {/* ── Desktop sidebar: inline-start === right edge in RTL ─────────── */}
-      <aside className="fixed inset-y-0 start-0 z-40 hidden w-64 flex-col border-e border-slate-200 bg-white md:flex">
-        <div className="border-b border-slate-100 px-5 py-5">
-          <BrandMark />
+      <aside className="fixed inset-y-0 start-0 z-40 hidden w-[264px] flex-col border-e border-[var(--border)] bg-[var(--surface)] md:flex">
+        <div className="px-5 py-6">
+          <LogoLockup size={40} subtitle />
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-          {sidebarItems.map(({ to, label, icon: Icon, end, showsPendingBadge, showsLinkedDot }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) => NAV_LINK(isActive)}
-            >
-              <Icon className="h-5 w-5 shrink-0" />
-              <span className="flex-1 text-start">{label}</span>
-              {showsPendingBadge && pendingCount > 0 && <PendingPill count={pendingCount} />}
-              {showsLinkedDot && whatsappLinked && <LinkedDot />}
-            </NavLink>
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+          {sidebarItems.map((item) => (
+            <NavRow
+              key={item.to}
+              item={item}
+              pendingCount={pendingCount}
+              whatsappLinked={whatsappLinked}
+            />
           ))}
         </nav>
 
-        <AccountPanel name={displayName} roleLabel={roleLabel} onLogout={handleLogout} />
-
-        <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-400">
-          © {arNum(year)}
-        </p>
+        <div className="space-y-1 border-t border-[var(--border)] p-3">
+          <ThemeToggle showLabel />
+          <AccountRow name={displayName} roleLabel={roleLabel} />
+          <LogoutRow onLogout={handleLogout} />
+        </div>
       </aside>
 
       {/* ── Mobile top bar + connection strip ───────────────────────────── */}
       {/* Both stick together so the network state is never scrolled away. */}
-      <div className="sticky top-0 z-30 md:ms-64">
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur md:hidden">
-          <BrandMark />
+      <div className="sticky top-0 z-30 md:ms-[264px]">
+        <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3 md:hidden">
+          <LogoLockup size={34} />
           <div className="flex items-center gap-2">
             {pendingCount > 0 && <PendingPill count={pendingCount} />}
-            <AccountMenu
-              name={displayName}
-              roleLabel={roleLabel}
-              ownerItems={ownerItems}
-              onLogout={handleLogout}
-            />
+            <ThemeToggle />
           </div>
         </header>
         <ConnectionBar />
       </div>
 
       {/* ── Content ─────────────────────────────────────────────────────── */}
-      <main className="px-4 pb-24 pt-5 md:ms-64 md:px-8 md:pb-10 md:pt-8">
+      <main className="px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 md:ms-[264px] md:px-8 md:pb-12 md:pt-8">
         <div className="mx-auto w-full max-w-6xl">{children ?? <Outlet />}</div>
       </main>
 
       {/* ── Mobile bottom bar ───────────────────────────────────────────── */}
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 grid border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
-        style={{ gridTemplateColumns: `repeat(${NAV_ITEMS.length}, minmax(0, 1fr))` }}
+        aria-label="التنقل الرئيسي"
+        className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[var(--border)] bg-[var(--surface)] pb-[env(safe-area-inset-bottom)] md:hidden"
       >
-        {NAV_ITEMS.map(
-          ({ to, label, shortLabel, icon: Icon, end, showsPendingBadge, showsLinkedDot }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                cn(
-                  "flex flex-col items-center gap-1 py-2 text-[10px] font-semibold transition-colors",
-                  isActive ? "text-blue-700" : "text-slate-500",
-                )
-              }
-            >
-              <span className="relative px-2">
-                <Icon className="h-5 w-5" />
-                {showsPendingBadge && pendingCount > 0 && (
-                  <PendingPill count={pendingCount} className="absolute end-0 top-0 text-[9px]" />
-                )}
-                {showsLinkedDot && whatsappLinked && (
-                  <LinkedDot className="absolute end-0 top-0" />
-                )}
-              </span>
-              <span className="truncate">{shortLabel ?? label}</span>
-            </NavLink>
-          ),
-        )}
+        {TAB_ITEMS.map(({ to, label, icon: Icon, end, showsPendingBadge }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) =>
+              cn(
+                "relative flex flex-col items-center gap-1 px-0.5 pb-2 pt-2.5 text-[10px] font-semibold transition-colors duration-150",
+                isActive ? "text-[var(--brand)]" : "text-[var(--ink-3)]",
+              )
+            }
+          >
+            {({ isActive }) => (
+              <>
+                {isActive && <TabIndicator />}
+                <span className="relative">
+                  <Icon className="h-5 w-5" aria-hidden />
+                  {showsPendingBadge && pendingCount > 0 && (
+                    <PendingPill
+                      count={pendingCount}
+                      className="absolute -top-1.5 end-[-10px] text-[9px]"
+                    />
+                  )}
+                </span>
+                <span className="w-full truncate text-center">{label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
+
+        <button
+          type="button"
+          onClick={() => setMoreOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={moreOpen}
+          className={cn(
+            "relative flex flex-col items-center gap-1 px-0.5 pb-2 pt-2.5 text-[10px] font-semibold transition-colors duration-150",
+            moreActive || moreOpen ? "text-[var(--brand)]" : "text-[var(--ink-3)]",
+          )}
+        >
+          {(moreActive || moreOpen) && <TabIndicator />}
+          <span className="relative">
+            <MoreHorizontal className="h-5 w-5" aria-hidden />
+            {whatsappLinked && <LinkedDot className="absolute -top-1 end-[-6px]" />}
+          </span>
+          <span className="w-full truncate text-center">المزيد</span>
+        </button>
       </nav>
+
+      {/* ── «المزيد»: the rest of the app, on a phone ───────────────────── */}
+      <Sheet open={moreOpen} onClose={() => setMoreOpen(false)} title="المزيد">
+        <p className="px-3 pb-2 text-start text-xs text-[var(--ink-3)]">{BRAND_SUBTITLE}</p>
+
+        <div className="space-y-1">
+          {moreItems.map((item) => (
+            <NavRow
+              key={item.to}
+              item={item}
+              pendingCount={pendingCount}
+              whatsappLinked={whatsappLinked}
+              onNavigate={() => setMoreOpen(false)}
+            />
+          ))}
+        </div>
+
+        <div className="mt-3 space-y-1 border-t border-[var(--border)] pt-3">
+          <ThemeToggle showLabel />
+          <AccountRow name={displayName} roleLabel={roleLabel} />
+          <LogoutRow onLogout={handleLogout} />
+        </div>
+      </Sheet>
     </div>
   );
 }

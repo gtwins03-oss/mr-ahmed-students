@@ -1,7 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon (Android 8+). Two layers, both re-masked by the launcher
+  into a circle, squircle or rounded square depending on the device.
+
+  The background is @color/ic_launcher_background — the brand violet — and NOT
+  the @mipmap/ic_launcher_background raster that `@capacitor/assets generate`
+  emits, which is plain white. The foreground is the brand tile inset to the
+  66% safe zone, so a white layer behind it shows as a pale ring around the
+  tile under a circular mask. Painting the background the same violet makes the
+  whole icon one solid colour whatever mask the device applies.
+
+  Re-running the `assets:gen` script inside web/ rewrites this file back to the
+  white raster — reapply this and values/ic_launcher_background.xml together.
+
+  NOTE: never write two consecutive hyphens anywhere in this comment. XML
+  forbids them inside a comment, and aapt fails :app:mergeDebugResources with
+  «The string is not permitted within comments».
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Solid blue rather than @mipmap/ic_launcher_background (a white PNG):
-         see res/values/ic_launcher_background.xml for why. -->
     <background android:drawable="@color/ic_launcher_background" />
     <foreground>
         <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.7%" />

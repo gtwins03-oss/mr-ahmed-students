@@ -2,10 +2,36 @@
 <html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#2563eb" />
-    <meta name="description" content="نظام إدارة الطلاب والحضور والدرجات وتنبيهات أولياء الأمور" />
-    <title>نظام إدارة الطلاب</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0A0B0F" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="مستر أحمد إبراهيم — إدارة الطلاب والحضور والدرجات وتنبيهات أولياء الأمور"
+    />
+    <title>Mr Ahmed Ibrahim Students</title>
+
+    <!-- Theme, before the first pixel.
+         The app is dark by default; a stored "light" has to be stamped on
+         <html> *now*, because a data-theme applied after React mounts would
+         paint one frame of the wrong canvas. Storage can throw in a WebView
+         with cookies disabled, hence the try/catch — the catch simply leaves
+         the default dark theme in place. Key stays in step with
+         src/lib/theme.ts (THEME_STORAGE_KEY). -->
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("tutor.theme");
+          if (stored === "light" || stored === "dark") {
+            document.documentElement.setAttribute("data-theme", stored);
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute("content", stored === "light" ? "#F6F7F9" : "#0A0B0F");
+          }
+        } catch (e) {
+          /* no storage — dark it is */
+        }
+      })();
+    </script>
 
     <!-- Arabic UI font. If Google Fonts is unreachable (offline / blocked),
          the stack below falls back to the system Arabic font and the app
@@ -18,20 +44,29 @@
     />
 
     <style>
+      /* Pre-hydration paint so the first frame is already the right canvas.
+         These four values mirror --bg / --ink in src/index.css. */
       :root {
-        --font-arabic: "Cairo", "Segoe UI", "Tahoma", "Noto Sans Arabic",
-          "Dubai", system-ui, -apple-system, sans-serif;
+        --font-arabic: "Cairo", "Segoe UI", "Tahoma", "Noto Sans Arabic", "Dubai",
+          system-ui, -apple-system, sans-serif;
+        color-scheme: dark;
+      }
+      :root[data-theme="light"] {
+        color-scheme: light;
       }
       html,
       body {
         font-family: var(--font-arabic);
         -webkit-font-smoothing: antialiased;
       }
-      /* Pre-hydration paint so the first frame is not a white flash. */
       body {
         margin: 0;
-        background-color: #f8fafc;
-        color: #0f172a;
+        background-color: #0a0b0f;
+        color: #ffffff;
+      }
+      :root[data-theme="light"] body {
+        background-color: #f6f7f9;
+        color: #0b0b0f;
       }
     </style>
   </head>

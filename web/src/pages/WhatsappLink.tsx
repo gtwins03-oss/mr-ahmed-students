@@ -43,6 +43,7 @@ import {
   LoadingBlock,
   PageHeader,
   Spinner,
+  cn,
 } from "../components/ui";
 import { arDateTime, arNum } from "../lib/format";
 import { openExternal } from "../lib/openExternal";
@@ -184,11 +185,24 @@ function useQrPoll(enabled: boolean): QrPoll {
 
 /* ────────────────────────────── small parts ───────────────────────────── */
 
+/**
+ * Numbered Arabic steps. The markers are drawn rather than left to
+ * `list-style-type`, so the digits are guaranteed Arabic-Indic, sit on the
+ * inline-start edge in RTL, and line up with the text beside them.
+ */
 function Steps({ items }: { items: string[] }) {
   return (
-    <ol className="list-inside space-y-2 text-start text-sm leading-7 text-slate-600 [list-style-type:arabic-indic]">
-      {items.map((step) => (
-        <li key={step}>{step}</li>
+    <ol className="space-y-3">
+      {items.map((step, index) => (
+        <li key={step} className="flex items-start gap-3">
+          <span
+            aria-hidden
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--brand-soft)] text-xs font-bold text-[var(--brand-ink)]"
+          >
+            {arNum(index + 1)}
+          </span>
+          <span className="min-w-0 text-start text-sm leading-7 text-[var(--ink-2)]">{step}</span>
+        </li>
       ))}
     </ol>
   );
@@ -196,27 +210,81 @@ function Steps({ items }: { items: string[] }) {
 
 function ErrorLine({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-start text-sm font-medium text-rose-700">
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold leading-7 text-[var(--ink)]">
       {children}
     </p>
   );
 }
 
+/** A tinted block whose words, not its colour, carry the warning. */
+function WarningBlock({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--late-soft)] px-4 py-3 text-start text-sm leading-7 text-[var(--ink)]">
+      {children}
+    </p>
+  );
+}
+
+/** Inline links inside a paragraph — the accent, never a second colour. */
+const INLINE_LINK =
+  "font-semibold text-[var(--brand-ink)] underline underline-offset-4 transition-colors duration-150 hover:text-[var(--brand)]";
+
 /** The always-available escape hatch, mentioned on every failure screen. */
 function ManualFallbackNote() {
   return (
-    <p className="text-start text-sm leading-7 text-slate-600">
+    <p className="text-start text-sm leading-7 text-[var(--ink-2)]">
       البديل بلا أي مخاطرة هو البقاء على «روابط واتساب»: التطبيق يجهّز نص كل رسالة وتضغط أنت
       «إرسال» داخل واتساب من{" "}
-      <Link to="/messages" className="font-semibold text-blue-700 underline underline-offset-4">
+      <Link to="/messages" className={INLINE_LINK}>
         قائمة الإرسال
       </Link>
       . يمكنك تغيير المزوّد في أي وقت من{" "}
-      <Link to="/settings" className="font-semibold text-blue-700 underline underline-offset-4">
+      <Link to="/settings" className={INLINE_LINK}>
         الإعدادات
       </Link>
       .
     </p>
+  );
+}
+
+/**
+ * A whole-screen state card: one tint, one icon, a headline and its body.
+ * Deliberately not a <Card>: overriding a Card's own background from outside
+ * would leave two background utilities of equal specificity on one element.
+ */
+function StateCard({
+  tone,
+  icon,
+  title,
+  children,
+}: {
+  tone: "present" | "absent";
+  icon: ReactNode;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={cn(
+        "elev overflow-hidden rounded-[20px] border border-[var(--border)] p-5 sm:p-6",
+        tone === "present" ? "bg-[var(--present-soft)]" : "bg-[var(--absent-soft)]",
+      )}
+    >
+      <div className="space-y-5">
+        <div className="flex items-start gap-3">
+          <span
+            className={cn(
+              "shrink-0",
+              tone === "present" ? "text-[var(--present-ink)]" : "text-[var(--absent-ink)]",
+            )}
+          >
+            {icon}
+          </span>
+          <h2 className="text-start text-lg font-bold text-[var(--ink)] sm:text-xl">{title}</h2>
+        </div>
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -355,7 +423,9 @@ export function WhatsappLink() {
     return (
       <>
         <PageHeader title="ربط واتساب" />
-        <LoadingBlock />
+        <Card>
+          <LoadingBlock />
+        </Card>
       </>
     );
   }
@@ -365,7 +435,7 @@ export function WhatsappLink() {
       <>
         <PageHeader title="ربط واتساب" />
         <Card>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <ErrorLine>{errorMessage(status.error)}</ErrorLine>
             <Button
               variant="secondary"
@@ -391,11 +461,7 @@ export function WhatsappLink() {
             : "SCAN";
 
   const refreshButton = (
-    <Button
-      variant="secondary"
-      disabled={busy}
-      onClick={() => refresh.mutate()}
-    >
+    <Button variant="secondary" disabled={busy} onClick={() => refresh.mutate()}>
       {refresh.isPending ? "جارٍ التحديث…" : "تحديث الحالة"}
     </Button>
   );
@@ -407,13 +473,15 @@ export function WhatsappLink() {
         subtitle="اربط رقم واتساب حضرتك مرة واحدة، فيرسل التطبيق تنبيهات الغياب والدرجات لأولياء الأمور بنفسه"
       />
 
-      <div className="space-y-5">
+      <div className="space-y-6">
         {notice ? (
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
-            <span className="text-start">{notice}</span>
+          <div className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--brand-soft)] px-4 py-3">
+            <span className="min-w-0 flex-1 text-start text-sm leading-7 text-[var(--ink)]">
+              {notice}
+            </span>
             <button
               type="button"
-              className="shrink-0 text-xs underline underline-offset-4"
+              className="shrink-0 rounded-lg px-1 py-0.5 text-xs font-semibold text-[var(--ink-3)] transition-colors duration-150 hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
               onClick={() => setNotice("")}
             >
               إخفاء
@@ -426,13 +494,13 @@ export function WhatsappLink() {
           <>
             <Card title="ما الذي يفعله الربط؟">
               <div className="space-y-3">
-                <p className="text-start text-sm leading-7 text-slate-700">
+                <p className="text-start text-sm leading-7 text-[var(--ink-2)]">
                   الآن التطبيق يجهّز نص الرسالة وتفتح أنت واتساب وتضغط «إرسال» لكل ولي أمر. بعد
                   الربط يرسل التطبيق الرسائل بنفسه — من رقمك أنت وبنفس النص — دون أن تفتح واتساب،
                   فتصل تنبيهات الغياب والدرجات لحظة تسجيلها.
                 </p>
-                <p className="text-start text-sm leading-7 text-slate-700">
-                  <span className="font-bold">التكلفة: </span>
+                <p className="text-start text-sm leading-7 text-[var(--ink-2)]">
+                  <span className="font-bold text-[var(--ink)]">التكلفة: </span>
                   الربط يتم عبر خدمة Green API. فيها خطة مجانية تكفي للتجربة لكنها محدودة العدد
                   وقد تضيف تأخيراً بسيطاً، وخطة مدفوعة بحوالي {arNum(PAID_PLAN_USD)} دولاراً في
                   الشهر. الاشتراك يخصّك أنت مباشرة مع الخدمة، وليس جزءاً من التطبيق.
@@ -443,19 +511,19 @@ export function WhatsappLink() {
             <Card
               title={
                 <span className="flex items-center gap-2">
-                  <ShieldAlert className="h-5 w-5 text-amber-600" />
+                  <ShieldAlert className="h-5 w-5 text-[var(--late-ink)]" aria-hidden />
                   اقرأ هذا قبل الربط
                 </span>
               }
             >
-              <div className="space-y-3">
-                <p className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-start text-sm leading-7 text-amber-900">
+              <div className="space-y-4">
+                <WarningBlock>
                   <span className="font-bold">Green API بوّابة غير رسمية لواتساب. </span>
                   هي تتصرّف كأنها جهاز مرتبط برقمك، وهذا يخالف شروط استخدام واتساب. النتيجة
                   الواقعية: هناك احتمال حقيقي بحظر الرقم — مؤقتاً أو نهائياً — خصوصاً مع الإرسال
                   بكثافة أو رسائل متشابهة دفعة واحدة أو لو بلّغ عنها ولي أمر كإزعاج. لا تربط رقمك
                   الشخصي الأساسي؛ استخدم رقماً مخصصاً للسنتر.
-                </p>
+                </WarningBlock>
                 <ManualFallbackNote />
               </div>
             </Card>
@@ -468,12 +536,12 @@ export function WhatsappLink() {
                   variant="secondary"
                   onClick={() => void openExternal(GREEN_API_URL)}
                 >
-                  <ExternalLink className="h-4 w-4" />
+                  <ExternalLink className="h-4 w-4" aria-hidden />
                   فتح green-api.com
                 </Button>
               }
             >
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <Steps
                   items={[
                     "افتح موقع green-api.com وأنشئ حساباً مجانياً ببريدك الإلكتروني.",
@@ -515,7 +583,7 @@ export function WhatsappLink() {
                       إلغاء
                     </Button>
                   ) : null}
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-[var(--ink-3)]">
                     تُحفظ البيانات على الخادم ولا تظهر مرة أخرى في المتصفح.
                   </span>
                 </div>
@@ -529,7 +597,7 @@ export function WhatsappLink() {
           <Card
             title={
               <span className="flex items-center gap-2">
-                <QrCode className="h-5 w-5 text-blue-600" />
+                <QrCode className="h-5 w-5 text-[var(--brand)]" aria-hidden />
                 امسح رمز الربط من تليفونك
               </span>
             }
@@ -538,30 +606,33 @@ export function WhatsappLink() {
             {/* `_` not `,` — Tailwind v4 emits an arbitrary value verbatim, and
                 `auto,1fr` is invalid CSS the browser silently drops. */}
             <div className="grid gap-6 lg:grid-cols-[auto_1fr] lg:items-start">
-              {/* White panel on purpose: a QR on a tinted card does not scan. */}
-              <div
-                aria-live="polite"
-                className="mx-auto flex items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-              >
-                {poll.image ? (
-                  <img
-                    src={poll.image}
-                    alt="رمز ربط واتساب"
-                    width={240}
-                    height={240}
-                    className="h-60 w-60 max-w-full bg-white object-contain [image-rendering:pixelated] sm:h-64 sm:w-64"
-                  />
-                ) : (
-                  <div className="flex h-60 w-60 flex-col items-center justify-center gap-3 bg-white text-center text-sm text-slate-500 sm:h-64 sm:w-64">
-                    <Spinner />
-                    <span>جارٍ تجهيز الرمز…</span>
-                  </div>
-                )}
+              <div aria-live="polite" className="space-y-3">
+                {/* HARD REQUIREMENT: white in BOTH themes. A QR printed on a
+                    dark surface will not scan, so this is the one element in
+                    the app that pins a colour instead of reading a token. */}
+                <div className="mx-auto flex w-fit items-center justify-center rounded-2xl border border-[var(--border)] bg-white p-4">
+                  {poll.image ? (
+                    <img
+                      src={poll.image}
+                      alt="رمز ربط واتساب"
+                      width={240}
+                      height={240}
+                      className="h-60 w-60 max-w-full bg-white object-contain [image-rendering:pixelated] sm:h-64 sm:w-64"
+                    />
+                  ) : (
+                    <div className="flex h-60 w-60 items-center justify-center sm:h-64 sm:w-64">
+                      <Spinner className="h-8 w-8" />
+                    </div>
+                  )}
+                </div>
+                {!poll.image ? (
+                  <p className="text-center text-sm text-[var(--ink-2)]">جارٍ تجهيز الرمز…</p>
+                ) : null}
               </div>
 
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 text-start text-sm font-bold text-slate-800">
-                  <Smartphone className="h-5 w-5 shrink-0 text-slate-400" />
+              <div className="space-y-5">
+                <div className="flex items-center gap-2 text-start text-sm font-semibold text-[var(--ink)]">
+                  <Smartphone className="h-5 w-5 shrink-0 text-[var(--ink-3)]" aria-hidden />
                   على تليفونك، بالترتيب:
                 </div>
                 <Steps
@@ -573,13 +644,13 @@ export function WhatsappLink() {
                     "وجّه الكاميرا إلى الرمز الظاهر في هذه الصفحة.",
                   ]}
                 />
-                <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-start text-sm leading-7 text-slate-600">
+                <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-start text-sm leading-7 text-[var(--ink-2)]">
                   الرمز يتجدّد تلقائياً كل بضع ثوانٍ، فلو انتهت صلاحيته انتظر لحظة وسيظهر رمز
                   جديد. اترك هذه الصفحة مفتوحة حتى تتحوّل إلى رسالة «تم الربط».
                 </p>
 
                 {poll.error ? (
-                  <p className="text-start text-xs font-medium text-amber-700">
+                  <p className="text-start text-xs font-semibold text-[var(--late-ink)]">
                     تعذّر تحديث الرمز الآن ({poll.error}) — ما زلنا نحاول.
                   </p>
                 ) : null}
@@ -606,79 +677,72 @@ export function WhatsappLink() {
         {/* ─────────────────── C · linked ─────────────────────────────── */}
         {screen === "LINKED" ? (
           <>
-            {/* Not a <Card>: overriding its own border/background colour from
-                the outside would leave two conflicting Tailwind utilities on
-                one element, and which wins depends on CSS emission order. */}
-            <section className="overflow-hidden rounded-xl border border-emerald-300 bg-emerald-50 p-4 shadow-sm">
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="mt-0.5 h-8 w-8 shrink-0 text-emerald-600" />
-                  <div className="min-w-0 space-y-1">
-                    <h2 className="text-start text-lg font-bold text-emerald-900 sm:text-xl">
-                      تم ربط واتساب بنجاح
-                    </h2>
-                    <p className="text-start text-base font-bold text-emerald-800">
-                      متصل:{" "}
-                      {phone ? (
-                        <span dir="ltr" className="font-mono">
-                          {phone}
-                        </span>
-                      ) : (
-                        <span className="font-normal">
-                          الرقم غير متاح بعد — اضغط «تحديث الحالة»
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-start text-sm text-emerald-800">
-                      تاريخ الربط: {linkedAt ? arDateTime(linkedAt) : "—"}
-                    </p>
-                  </div>
-                </div>
-
-                <p className="rounded-xl border border-emerald-200 bg-white px-4 py-3 text-start text-sm leading-7 text-emerald-900">
-                  تنبيهات الغياب والدرجات المنخفضة تُرسَل الآن تلقائياً من هذا الرقم إلى أولياء
-                  الأمور، دون الحاجة لفتح واتساب. تبقى كل رسالة مسجّلة في{" "}
-                  <Link
-                    to="/messages"
-                    className="font-semibold underline underline-offset-4"
-                  >
-                    قائمة الإرسال
-                  </Link>{" "}
-                  حتى تعرف ما وصل ومتى، ولا يُرسَل أي شيء أثناء ساعات الهدوء.
+            <StateCard
+              tone="present"
+              icon={<CheckCircle2 className="h-8 w-8" aria-hidden />}
+              title="تم ربط واتساب بنجاح"
+            >
+              <div>
+                <p className="text-start text-xs font-semibold text-[var(--ink-3)]">
+                  الرقم المتصل
                 </p>
-
-                {provider !== "GREEN_API" ? (
-                  <p className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-start text-sm leading-7 text-amber-900">
-                    الحساب مرتبط، لكن المزوّد النشط في{" "}
-                    <Link to="/settings" className="font-semibold underline underline-offset-4">
-                      الإعدادات
-                    </Link>{" "}
-                    ما زال «روابط واتساب»، فالرسائل تنتظر ضغطك اليدوي. اختر «Green API» من مزوّد
-                    الإرسال ليبدأ الإرسال التلقائي.
-                  </p>
-                ) : null}
-
-                {serverWarning ? (
-                  <p className="text-start text-sm text-emerald-800">{serverWarning}</p>
-                ) : null}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {refreshButton}
-                  <ConfirmButton
-                    confirmLabel="تأكيد فصل الحساب؟"
-                    disabled={busy}
-                    onConfirm={() => unlink.mutate()}
+                {phone ? (
+                  <p
+                    dir="ltr"
+                    className="mt-1.5 text-start font-mono text-2xl font-bold tracking-tight text-[var(--ink)]"
                   >
-                    {unlink.isPending ? "جارٍ الفصل…" : "فصل الحساب"}
-                  </ConfirmButton>
-                </div>
-
-                <p className="text-start text-xs leading-6 text-emerald-800">
-                  فصل الحساب يوقف الإرسال التلقائي فوراً ويعيدك إلى الإرسال اليدوي. لن تفقد أي
-                  رسالة — تبقى في قائمة الإرسال حتى ترسلها بنفسك.
+                    {phone}
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-start text-sm text-[var(--ink-2)]">
+                    الرقم غير متاح بعد — اضغط «تحديث الحالة»
+                  </p>
+                )}
+                <p className="mt-2 text-start text-sm text-[var(--ink-2)]">
+                  تاريخ الربط: {linkedAt ? arDateTime(linkedAt) : "—"}
                 </p>
               </div>
-            </section>
+
+              <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-start text-sm leading-7 text-[var(--ink-2)]">
+                تنبيهات الغياب والدرجات المنخفضة تُرسَل الآن تلقائياً من هذا الرقم إلى أولياء
+                الأمور، دون الحاجة لفتح واتساب. تبقى كل رسالة مسجّلة في{" "}
+                <Link to="/messages" className={INLINE_LINK}>
+                  قائمة الإرسال
+                </Link>{" "}
+                حتى تعرف ما وصل ومتى، ولا يُرسَل أي شيء أثناء ساعات الهدوء.
+              </p>
+
+              {provider !== "GREEN_API" ? (
+                <WarningBlock>
+                  الحساب مرتبط، لكن المزوّد النشط في{" "}
+                  <Link to="/settings" className={INLINE_LINK}>
+                    الإعدادات
+                  </Link>{" "}
+                  ما زال «روابط واتساب»، فالرسائل تنتظر ضغطك اليدوي. اختر «Green API» من مزوّد
+                  الإرسال ليبدأ الإرسال التلقائي.
+                </WarningBlock>
+              ) : null}
+
+              {serverWarning ? (
+                <p className="text-start text-sm leading-7 text-[var(--ink-2)]">{serverWarning}</p>
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                {refreshButton}
+                <ConfirmButton
+                  confirmLabel="تأكيد فصل الحساب؟"
+                  disabled={busy}
+                  onConfirm={() => unlink.mutate()}
+                >
+                  {unlink.isPending ? "جارٍ الفصل…" : "فصل الحساب"}
+                </ConfirmButton>
+              </div>
+
+              <p className="text-start text-xs leading-6 text-[var(--ink-3)]">
+                فصل الحساب يوقف الإرسال التلقائي فوراً ويعيدك إلى الإرسال اليدوي. لن تفقد أي
+                رسالة — تبقى في قائمة الإرسال حتى ترسلها بنفسك.
+              </p>
+            </StateCard>
 
             {unlink.isError ? <ErrorLine>{errorMessage(unlink.error)}</ErrorLine> : null}
           </>
@@ -686,91 +750,81 @@ export function WhatsappLink() {
 
         {/* ─────────────────── BLOCKED ────────────────────────────────── */}
         {screen === "BLOCKED" ? (
-          <section className="overflow-hidden rounded-xl border border-rose-300 bg-white p-4 shadow-sm">
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <ShieldAlert className="mt-0.5 h-8 w-8 shrink-0 text-rose-600" />
-                <div className="min-w-0">
-                  <h2 className="text-start text-lg font-bold text-rose-800">
-                    واتساب أوقف هذا الرقم
-                  </h2>
-                  {phone ? (
-                    <p className="mt-1 text-start text-sm font-bold text-rose-800">
-                      الرقم:{" "}
-                      <span dir="ltr" className="font-mono">
-                        {phone}
-                      </span>
-                    </p>
-                  ) : null}
-                  <p className="mt-1 text-start text-sm leading-7 text-slate-700">
-                    حظر واتساب هذا الرقم أو علّقه، والإرسال التلقائي متوقف الآن. هذا ما يحدث عادةً
-                    عند إرسال عدد كبير من الرسائل المتشابهة في وقت قصير أو عند تبليغ أولياء الأمور
-                    عنها. لا تحاول الربط مرة أخرى بنفس الرقم فوراً — راجع حسابك من داخل واتساب
-                    أولاً، وقدّم اعتراضاً إن كان الحظر مؤقتاً.
+          <StateCard
+            tone="absent"
+            icon={<ShieldAlert className="h-8 w-8" aria-hidden />}
+            title="واتساب أوقف هذا الرقم"
+          >
+            <div>
+              {phone ? (
+                <>
+                  <p className="text-start text-xs font-semibold text-[var(--ink-3)]">الرقم</p>
+                  <p
+                    dir="ltr"
+                    className="mt-1.5 text-start font-mono text-2xl font-bold tracking-tight text-[var(--ink)]"
+                  >
+                    {phone}
                   </p>
-                </div>
-              </div>
-
-              {serverWarning ? <ErrorLine>{serverWarning}</ErrorLine> : null}
-              <ManualFallbackNote />
-
-              <div className="flex flex-wrap items-center gap-2">
-                {refreshButton}
-                <Button variant="ghost" disabled={busy} onClick={() => setEditing(true)}>
-                  ربط رقم آخر
-                </Button>
-                <ConfirmButton
-                  confirmLabel="تأكيد فصل الحساب؟"
-                  disabled={busy}
-                  onConfirm={() => unlink.mutate()}
-                >
-                  فصل الحساب
-                </ConfirmButton>
-              </div>
+                </>
+              ) : null}
+              <p className="mt-3 text-start text-sm leading-7 text-[var(--ink-2)]">
+                حظر واتساب هذا الرقم أو علّقه، والإرسال التلقائي متوقف الآن. هذا ما يحدث عادةً
+                عند إرسال عدد كبير من الرسائل المتشابهة في وقت قصير أو عند تبليغ أولياء الأمور
+                عنها. لا تحاول الربط مرة أخرى بنفس الرقم فوراً — راجع حسابك من داخل واتساب
+                أولاً، وقدّم اعتراضاً إن كان الحظر مؤقتاً.
+              </p>
             </div>
-          </section>
+
+            {serverWarning ? <ErrorLine>{serverWarning}</ErrorLine> : null}
+            <ManualFallbackNote />
+
+            <div className="flex flex-wrap items-center gap-2">
+              {refreshButton}
+              <Button variant="ghost" disabled={busy} onClick={() => setEditing(true)}>
+                ربط رقم آخر
+              </Button>
+              <ConfirmButton
+                confirmLabel="تأكيد فصل الحساب؟"
+                disabled={busy}
+                onConfirm={() => unlink.mutate()}
+              >
+                فصل الحساب
+              </ConfirmButton>
+            </div>
+          </StateCard>
         ) : null}
 
         {/* ─────────────────── ERROR ──────────────────────────────────── */}
         {screen === "FAULT" ? (
-          <section className="overflow-hidden rounded-xl border border-rose-300 bg-white p-4 shadow-sm">
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <ShieldAlert className="mt-0.5 h-8 w-8 shrink-0 text-rose-600" />
-                <div className="min-w-0">
-                  <h2 className="text-start text-lg font-bold text-rose-800">
-                    تعذّر الاتصال بخدمة الربط
-                  </h2>
-                  <p className="mt-1 text-start text-sm leading-7 text-slate-700">
-                    الخدمة لم تردّ كما هو متوقع. الأسباب المعتادة: بيانات idInstance أو
-                    apiTokenInstance غير صحيحة، أو انتهاء صلاحية الاشتراك في green-api.com، أو
-                    انقطاع مؤقت في الشبكة.
-                  </p>
-                </div>
-              </div>
+          <StateCard
+            tone="absent"
+            icon={<ShieldAlert className="h-8 w-8" aria-hidden />}
+            title="تعذّر الاتصال بخدمة الربط"
+          >
+            <p className="text-start text-sm leading-7 text-[var(--ink-2)]">
+              الخدمة لم تردّ كما هو متوقع. الأسباب المعتادة: بيانات idInstance أو
+              apiTokenInstance غير صحيحة، أو انتهاء صلاحية الاشتراك في green-api.com، أو انقطاع
+              مؤقت في الشبكة.
+            </p>
 
-              {serverWarning ? <ErrorLine>{serverWarning}</ErrorLine> : null}
-              {refresh.isError ? <ErrorLine>{errorMessage(refresh.error)}</ErrorLine> : null}
+            {serverWarning ? <ErrorLine>{serverWarning}</ErrorLine> : null}
+            {refresh.isError ? <ErrorLine>{errorMessage(refresh.error)}</ErrorLine> : null}
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Button disabled={busy} onClick={() => refresh.mutate()}>
-                  {refresh.isPending ? "جارٍ المحاولة…" : "إعادة المحاولة"}
-                </Button>
-                <Button variant="secondary" disabled={busy} onClick={() => setEditing(true)}>
-                  تعديل بيانات الربط
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => void openExternal(GREEN_API_URL)}
-                >
-                  <ExternalLink className="h-4 w-4" />
-                  فتح green-api.com
-                </Button>
-              </div>
-
-              <ManualFallbackNote />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button disabled={busy} onClick={() => refresh.mutate()}>
+                {refresh.isPending ? "جارٍ المحاولة…" : "إعادة المحاولة"}
+              </Button>
+              <Button variant="secondary" disabled={busy} onClick={() => setEditing(true)}>
+                تعديل بيانات الربط
+              </Button>
+              <Button variant="ghost" onClick={() => void openExternal(GREEN_API_URL)}>
+                <ExternalLink className="h-4 w-4" aria-hidden />
+                فتح green-api.com
+              </Button>
             </div>
-          </section>
+
+            <ManualFallbackNote />
+          </StateCard>
         ) : null}
       </div>
     </div>

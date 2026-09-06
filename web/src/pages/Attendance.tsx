@@ -1,6 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+/**
+ * /attendance — the screen that gets used every single day, in a hurry,
+ * standing in front of a class. It is optimised harder than anything else here.
+ *
+ * Layout decisions that are deliberate:
+ *  - The date bar is sticky. Scrolling a long roster must never cost the
+ *    teacher the ability to jump to yesterday or check which day is open.
+ *  - One Card per session, headed by the class colour, with the live counters
+ *    as chips so the tally is readable without counting rows.
+ *  - The three status buttons are 44px tall and 72px wide minimum, because they
+ *    are tapped with a thumb while holding a phone in the other hand.
+ *  - Every write is optimistic (see `saveMarks.onMutate`): the teacher never
+ *    waits for the network mid-class, and a failed request rolls the row back.
+ *
+ * Colour never carries the meaning: the Arabic word — حاضر / غائب / متأخر — is
+ * printed on the control in every state.
+ */
+
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { api, errorMessage } from "../api/client";
 import type {
   AttendanceMark,
@@ -10,27 +29,63 @@ import type {
   SaveResult,
   SessionWithRoster,
 } from "../api/types";
-import { Button, Card, EmptyState, LoadingBlock, PageHeader } from "../components/ui";
-import { STATUS_AR, addDaysISO, arDate, arNum, arTime, isToday, todayISO } from "../lib/format";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  LoadingBlock,
+  PageHeader,
+  Spinner,
+  cn,
+} from "../components/ui";
+import { STATUS_AR, addDaysISO, arDate, arNum, arTime, todayISO } from "../lib/format";
 
-/** The three statuses that get a big button. EXCUSED stays a rare, typed-in case. */
-const OPTIONS: { value: AttendanceStatus; on: string; off: string }[] = [
-  {
-    value: "PRESENT",
-    on: "bg-emerald-600 text-white shadow-sm",
-    off: "bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-800",
-  },
-  {
-    value: "ABSENT",
-    on: "bg-rose-600 text-white shadow-sm",
-    off: "bg-slate-100 text-slate-700 hover:bg-rose-50 hover:text-rose-800",
-  },
-  {
-    value: "LATE",
-    on: "bg-amber-500 text-white shadow-sm",
-    off: "bg-slate-100 text-slate-700 hover:bg-amber-50 hover:text-amber-800",
-  },
+/* ─────────────────────────── status buttons ───────────────────────────── */
+
+interface StatusOption {
+  value: AttendanceStatus;
+  /** Solid fill of the selected state. */
+  fill: string;
+  /** Ink printed on top of that fill. */
+  ink: string;
+}
+
+/**
+ * The three statuses that get a big button. EXCUSED stays a rare, typed-in
+ * case and is only ever *shown* here, never set.
+ *
+ * `ink` is white for the two dark fills. --late is a bright yellow where white
+ * would print «متأخر» at 1.8:1 — unreadable, and a direct breach of the rule
+ * that the word is always legible — so it takes --surface instead, which is
+ * the near-black card colour on dark and the highest-contrast ink the light
+ * theme already ships.
+ */
+const OPTIONS: StatusOption[] = [
+  { value: "PRESENT", fill: "var(--present)", ink: "var(--brand-contrast)" },
+  { value: "ABSENT", fill: "var(--absent)", ink: "var(--brand-contrast)" },
+  { value: "LATE", fill: "var(--late)", ink: "var(--surface)" },
 ];
+
+/* ──────────────────────────── the date bar ────────────────────────────── */
+
+/** «أمس / اليوم / غداً», expressed as offsets from the real today. */
+const QUICK_DAYS: { label: string; offset: number }[] = [
+  { label: "أمس", offset: -1 },
+  { label: "اليوم", offset: 0 },
+  { label: "غداً", offset: 1 },
+];
+
+/** ١ حصة · حصتان · ٣ حصص · ١١ حصة — Arabic counts a small number differently. */
+function sessionCountLabel(count: number): string {
+  if (count === 0) return "لا توجد حصص";
+  if (count === 1) return "حصة واحدة";
+  if (count === 2) return "حصتان";
+  if (count <= 10) return `${arNum(count)} حصص`;
+  return `${arNum(count)} حصة`;
+}
+
+/* ─────────────────────────────── helpers ──────────────────────────────── */
 
 function tally(roster: RosterEntry[]) {
   let present = 0;
@@ -54,6 +109,20 @@ function tally(roster: RosterEntry[]) {
   };
 }
 
+/** The one error shape this page shows — a tinted block, never bare text. */
+function ErrorNote({ children }: { children: ReactNode }) {
+  return (
+    <p
+      role="alert"
+      className="rounded-2xl bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold text-[var(--absent-ink)]"
+    >
+      {children}
+    </p>
+  );
+}
+
+/* ─────────────────────────────── the page ─────────────────────────────── */
+
 export function Attendance() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -66,9 +135,7 @@ export function Attendance() {
     queryKey: sessionsKey,
     queryFn: async () => {
       // The weekly schedule decides which sessions exist — materialise them first.
-      await api.post<EnsureSessionsResult>(
-        `/sessions/ensure?date=${encodeURIComponent(date)}`,
-      );
+      await api.post<EnsureSessionsResult>(`/sessions/ensure?date=${encodeURIComponent(date)}`);
       return api.get<SessionWithRoster[]>(`/sessions?date=${encodeURIComponent(date)}`);
     },
     placeholderData: keepPreviousData,
@@ -129,58 +196,78 @@ export function Attendance() {
   };
 
   const list = sessions.data ?? [];
+  const today = todayISO();
+  // A background refetch keeps the previous day's list on screen, so the only
+  // honest signal that something is happening is a small spinner in the bar.
+  const refreshing = sessions.isFetching && !sessions.isLoading;
 
   return (
     <div>
-      <PageHeader
-        title="تسجيل الحضور"
-        subtitle={arDate(date)}
-        actions={
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setDate((current) => addDaysISO(current, -1))}
-            >
-              ‹ السابق
-            </Button>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value || todayISO())}
-              className="h-9 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setDate((current) => addDaysISO(current, 1))}
-            >
-              التالي ›
-            </Button>
-            <Button
-              variant={isToday(date) ? "primary" : "ghost"}
-              size="sm"
-              onClick={() => setDate(todayISO())}
-            >
-              اليوم
-            </Button>
-          </>
-        }
-      />
+      <PageHeader title="تسجيل الحضور" subtitle={arDate(date)} />
+
+      {/* ── Sticky date bar ──────────────────────────────────────────────
+          top-14 clears the mobile app header; on md+ that header is hidden
+          and the bar sits flush against the top of the viewport. */}
+      <div className="sticky top-14 z-20 -mt-3 bg-[var(--bg)] pb-5 pt-3 md:top-0">
+        <div className="elev flex flex-wrap items-center gap-2 rounded-[20px] border border-[var(--border)] bg-[var(--surface)] p-3 sm:gap-3 sm:p-4">
+          <div
+            role="group"
+            aria-label="اختيار اليوم"
+            className="flex items-center gap-1 rounded-2xl bg-[var(--surface-2)] p-1"
+          >
+            {QUICK_DAYS.map(({ label, offset }) => {
+              const value = addDaysISO(today, offset);
+              const active = date === value;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setDate(value)}
+                  className={cn(
+                    "h-9 rounded-xl px-3 text-sm font-semibold transition-colors duration-150",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+                    active
+                      ? "bg-[var(--brand)] text-[var(--brand-contrast)]"
+                      : "text-[var(--ink-2)] hover:bg-[var(--surface-3)] hover:text-[var(--ink)]",
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          <input
+            type="date"
+            value={date}
+            aria-label="تاريخ الحصص"
+            onChange={(e) => setDate(e.target.value || todayISO())}
+            className={cn(
+              "h-11 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 text-sm font-semibold text-[var(--ink)]",
+              "transition-colors duration-150 hover:border-[var(--border-strong)]",
+              "focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-soft)]",
+            )}
+          />
+
+          <span className="ms-auto flex items-center gap-2 text-xs font-semibold text-[var(--ink-3)]">
+            {refreshing && <Spinner className="h-4 w-4" />}
+            {sessions.isLoading ? "جارٍ التحميل…" : sessionCountLabel(list.length)}
+          </span>
+        </div>
+      </div>
 
       <div className="space-y-6">
         {saveMarks.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            تعذّر حفظ التسجيل: {errorMessage(saveMarks.error)}
-          </p>
+          <ErrorNote>تعذّر حفظ التسجيل: {errorMessage(saveMarks.error)}</ErrorNote>
         ) : null}
 
         {sessions.isLoading ? (
-          <LoadingBlock />
+          <Card bodyClassName="p-0">
+            <LoadingBlock />
+          </Card>
         ) : sessions.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(sessions.error)}
-          </p>
+          <ErrorNote>{errorMessage(sessions.error)}</ErrorNote>
         ) : list.length === 0 ? (
           <Card bodyClassName="p-0">
             <EmptyState
@@ -202,16 +289,17 @@ export function Attendance() {
                 key={session.id}
                 bodyClassName="p-0"
                 title={
-                  <span className="flex items-center gap-3">
+                  <span className="flex min-w-0 items-center gap-3">
                     <span
-                      className="h-9 w-1.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: session.classGroup?.color ?? "#2563eb" }}
+                      aria-hidden
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: session.classGroup?.color || "var(--brand)" }}
                     />
                     <span className="min-w-0">
-                      <span className="block truncate text-base font-bold text-slate-900">
+                      <span className="block truncate text-start text-base font-semibold text-[var(--ink)]">
                         {session.classGroup?.name ?? "مجموعة"}
                       </span>
-                      <span className="block truncate text-sm font-normal text-slate-500">
+                      <span className="block truncate text-start text-xs font-normal text-[var(--ink-3)]">
                         {session.classGroup?.subject ?? ""} · {arTime(session.startTime)}
                         {session.endTime ? ` - ${arTime(session.endTime)}` : ""}
                       </span>
@@ -219,86 +307,87 @@ export function Attendance() {
                   </span>
                 }
                 actions={
-                  <>
-                    <span className="hidden items-center gap-2 text-sm font-semibold tabular-nums sm:flex">
-                      <span className="text-emerald-700">حاضر {arNum(counts.present)}</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="text-rose-700">غائب {arNum(counts.absent)}</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="text-amber-600">متأخر {arNum(counts.late)}</span>
-                      {counts.unmarked > 0 ? (
-                        <>
-                          <span className="text-slate-300">·</span>
-                          <span className="text-slate-500">
-                            بدون تسجيل {arNum(counts.unmarked)}
-                          </span>
-                        </>
-                      ) : null}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={saveMarks.isPending || roster.length === 0}
-                      onClick={() =>
-                        mark(
-                          session.id,
-                          roster.map((entry) => ({
-                            studentId: entry.studentId,
-                            status: "PRESENT",
-                          })),
-                        )
-                      }
-                    >
-                      تحديد الكل حاضر
-                    </Button>
-                  </>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={saveMarks.isPending || roster.length === 0}
+                    onClick={() =>
+                      mark(
+                        session.id,
+                        roster.map((entry) => ({
+                          studentId: entry.studentId,
+                          status: "PRESENT",
+                        })),
+                      )
+                    }
+                  >
+                    تحديد الكل حاضر
+                  </Button>
                 }
               >
-                <p className="flex items-center gap-2 border-b border-slate-100 px-4 py-2 text-sm font-semibold tabular-nums sm:hidden">
-                  <span className="text-emerald-700">حاضر {arNum(counts.present)}</span>
-                  <span className="text-slate-300">·</span>
-                  <span className="text-rose-700">غائب {arNum(counts.absent)}</span>
-                  <span className="text-slate-300">·</span>
-                  <span className="text-amber-600">متأخر {arNum(counts.late)}</span>
-                </p>
+                {/* Live counters. Each chip prints its own Arabic word, so the
+                    tally survives being read in greyscale. */}
+                <div className="flex flex-wrap items-center gap-2 px-5 pb-4 pt-3 sm:px-6">
+                  <Badge tone="green">حاضر {arNum(counts.present)}</Badge>
+                  <Badge tone="red">غائب {arNum(counts.absent)}</Badge>
+                  <Badge tone="amber">متأخر {arNum(counts.late)}</Badge>
+                  {counts.excused > 0 && <Badge tone="gray">بعذر {arNum(counts.excused)}</Badge>}
+                  {counts.unmarked > 0 && (
+                    <Badge tone="gray">بدون تسجيل {arNum(counts.unmarked)}</Badge>
+                  )}
+                </div>
 
                 {notice && notice.sessionId === session.id ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-800">
-                    <span>تم إضافة {arNum(notice.queued)} رسالة إلى قائمة الإرسال</span>
-                    <Link to="/messages" className="font-bold underline underline-offset-4">
+                  <div className="mx-5 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[var(--brand-soft)] px-4 py-3 text-sm sm:mx-6">
+                    <span className="text-[var(--ink)]">
+                      تم إضافة {arNum(notice.queued)} رسالة إلى قائمة الإرسال
+                    </span>
+                    <Link
+                      to="/messages"
+                      className="font-semibold text-[var(--brand-ink)] underline underline-offset-4"
+                    >
                       فتح قائمة الإرسال
                     </Link>
                   </div>
                 ) : null}
 
                 {roster.length === 0 ? (
-                  <p className="px-4 py-8 text-center text-sm text-slate-500">
-                    لا يوجد طلاب مسجّلون في هذه المجموعة بعد.
-                  </p>
+                  <EmptyState title="لا يوجد طلاب مسجّلون في هذه المجموعة بعد." />
                 ) : (
-                  <ul className="divide-y divide-slate-100">
+                  <ul className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
                     {roster.map((entry) => (
                       <li
                         key={entry.studentId}
-                        className={`flex flex-wrap items-center gap-3 px-4 py-3 ${
-                          entry.status ? "bg-white" : "bg-amber-50/40"
-                        }`}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-2.5 px-5 py-3 transition-colors duration-150 hover:bg-[var(--surface-2)] sm:px-6"
                       >
-                        <div className="min-w-0 flex-1">
+                        <div className="min-w-0 basis-full sm:flex-1 sm:basis-auto">
                           <Link
                             to={`/students/${entry.studentId}`}
-                            className="block truncate text-base font-semibold text-slate-900 hover:text-blue-700"
+                            className="flex min-w-0 items-center gap-2 text-start"
                           >
-                            {entry.name}
+                            <span className="truncate text-sm font-semibold text-[var(--ink)] transition-colors duration-150 hover:text-[var(--brand-ink)]">
+                              {entry.name}
+                            </span>
+                            {entry.status === "EXCUSED" && (
+                              <Badge tone="gray">{STATUS_AR.EXCUSED}</Badge>
+                            )}
                           </Link>
-                          <p className="truncate text-sm text-slate-500">{entry.parentName}</p>
+                          <p className="truncate text-start text-xs text-[var(--ink-3)]">
+                            {entry.parentName}
+                          </p>
                         </div>
 
+                        {/* basis-full keeps this off the button row on a phone:
+                            the three buttons are flex-1 (basis 0) and would
+                            otherwise be squeezed past their min-content width
+                            and push the row over 360px. */}
                         {entry.status === "LATE" ? (
-                          <label className="flex items-center gap-2 text-sm text-slate-600">
+                          <label className="flex basis-full items-center gap-2 text-xs text-[var(--ink-3)] sm:shrink-0 sm:basis-auto">
                             <span>دقائق التأخير</span>
                             <input
                               type="number"
+                              inputMode="numeric"
+                              dir="ltr"
                               min={0}
                               max={240}
                               defaultValue={entry.minutesLate ?? ""}
@@ -317,12 +406,16 @@ export function Attendance() {
                                   },
                                 ]);
                               }}
-                              className="w-20 rounded-xl border border-slate-300 px-2 py-1.5 text-center text-sm tabular-nums shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                              className={cn(
+                                "h-11 w-16 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-2 text-center text-sm font-semibold tabular-nums text-[var(--ink)]",
+                                "transition-colors duration-150 hover:border-[var(--border-strong)]",
+                                "focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-soft)]",
+                              )}
                             />
                           </label>
                         ) : null}
 
-                        <div className="flex gap-2">
+                        <div className="flex flex-1 items-center gap-2 sm:flex-none">
                           {OPTIONS.map((option) => {
                             const active = entry.status === option.value;
                             return (
@@ -336,9 +429,20 @@ export function Attendance() {
                                     { studentId: entry.studentId, status: option.value },
                                   ]);
                                 }}
-                                className={`min-w-[4.75rem] rounded-xl px-4 py-2.5 text-sm font-bold transition-colors ${
-                                  active ? option.on : option.off
-                                }`}
+                                className={cn(
+                                  "min-h-11 flex-1 rounded-2xl border px-3 text-sm font-bold transition-colors duration-150 sm:min-w-[4.5rem] sm:flex-none",
+                                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]",
+                                  active
+                                    ? // The fill is the state; the hairline would only fight it.
+                                      "border-transparent"
+                                    : // Keeps its own edge when the row hover paints --surface-2 underneath it.
+                                      "border-[var(--border)] bg-[var(--surface-2)] text-[var(--ink-2)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-3)] hover:text-[var(--ink)]",
+                                )}
+                                style={
+                                  active
+                                    ? { backgroundColor: option.fill, color: option.ink }
+                                    : undefined
+                                }
                               >
                                 {STATUS_AR[option.value]}
                               </button>

@@ -89,6 +89,18 @@ const TEMPLATES: { key: string; name: string; body: string }[] = [
   { key: "MONTHLY_REPORT", name: "التقرير الشهري", body: MONTHLY_REPORT_BODY },
 ];
 
+// ───────────────────────────────── Branding ──────────────────────────────────
+
+/**
+ * The product name, mirrored from web/src/components/Brand.tsx (BRAND_NAME).
+ * It seeds `Setting.centerName`, which is what the messaging layer prints at
+ * the bottom of a parent's WhatsApp message.
+ *
+ * It is only ever *filled in*, never overwritten: the teacher can rename the
+ * centre from «الإعدادات» and a re-seed must respect that. See `seedBranding()`.
+ */
+const CENTER_NAME = "Mr Ahmed Ibrahim Students";
+
 // ─────────────────────────── The OWNER account ───────────────────────────────
 
 /** Fallback used when server/.env has not been filled in yet. */
@@ -171,7 +183,7 @@ async function main(): Promise<void> {
     create: {
       id: 1,
       tutorName: "الأستاذ أحمد",
-      centerName: "",
+      centerName: CENTER_NAME,
       defaultCountryCode: "+20",
       lowGradeThreshold: 60,
       autoSendAbsence: true,
@@ -183,6 +195,9 @@ async function main(): Promise<void> {
       providerConfig: "{}",
     },
   });
+
+  // 1b ── fill in the centre name on databases seeded before it had a default
+  await seedBranding();
 
   // 2 ── the four Arabic message templates
   for (const t of TEMPLATES) {
@@ -282,6 +297,7 @@ async function main(): Promise<void> {
   console.log("");
   console.log("  ✅ تمت تهيئة قاعدة البيانات بنجاح");
   console.log(`  👤 اسم المُدرِّس:      ${settings.tutorName}`);
+  console.log(`  🏷️  اسم المركز:        ${settings.centerName}`);
   console.log(`  📨 مزوّد الرسائل:     ${settings.provider} (روابط واتساب — بدون أي بيانات اعتماد)`);
   console.log(`  📝 قوالب الرسائل:     ${templateCount}`);
   console.log(`  🏫 المجموعات:         ${classCount}`);
@@ -301,6 +317,24 @@ async function main(): Promise<void> {
     ownerOutcome,
     ownerPasswordWasGenerated
   );
+}
+
+/**
+ * Backfills `Setting.centerName` — and only ever backfills it.
+ *
+ * Older databases were seeded with an empty centre name, so the branded default
+ * would never reach them through `create`. Writing it unconditionally is not an
+ * option either: the teacher can set the centre name from «الإعدادات», and that
+ * string is printed in every parent's WhatsApp message. So the rule is exactly
+ * one direction — empty (or whitespace) gets the product name, anything else is
+ * left alone. Idempotent: the second run finds a non-empty value and no-ops.
+ */
+async function seedBranding(): Promise<void> {
+  const settings = await prisma.setting.findUnique({ where: { id: 1 } });
+  if (!settings || settings.centerName.trim() !== "") return;
+
+  await prisma.setting.update({ where: { id: 1 }, data: { centerName: CENTER_NAME } });
+  console.log(`  🏷️  تم ضبط اسم المركز الافتراضي: "${CENTER_NAME}" (كان فارغاً).`);
 }
 
 /**

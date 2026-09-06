@@ -1,4 +1,20 @@
-import { useMemo, useState } from "react";
+/**
+ * OWNER-only account management.
+ *
+ * The permission model is deliberately blunt: assistants may do *everything*
+ * with data and are only kept out of the audit log and this page. That is
+ * spelled out at the top of the screen so the teacher knows exactly what he is
+ * handing over when he creates an account.
+ *
+ * A password hash is never sent to the browser and is never rendered here;
+ * changing a password means writing a new one, never revealing the old one.
+ *
+ * The roster is a table from `md` up and a stack of cards below it — six
+ * columns cannot be read on a phone, and a horizontally scrolling table is a
+ * worse answer than one card per account.
+ */
+
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, ShieldCheck, UserCog } from "lucide-react";
 
@@ -10,26 +26,16 @@ import {
   Button,
   Card,
   ConfirmButton,
+  Dot,
   EmptyState,
   Input,
   LoadingBlock,
   Modal,
   PageHeader,
   Select,
+  cn,
 } from "../components/ui";
 import { arDateTime, arNum } from "../lib/format";
-
-/**
- * OWNER-only account management.
- *
- * The permission model is deliberately blunt: assistants may do *everything*
- * with data and are only kept out of the audit log and this page. That is
- * spelled out at the top of the screen so the teacher knows exactly what he is
- * handing over when he creates an account.
- *
- * A password hash is never sent to the browser and is never rendered here;
- * changing a password means writing a new one, never revealing the old one.
- */
 
 const ROLE_AR: Record<string, string> = {
   OWNER: "مالك",
@@ -69,6 +75,69 @@ function usernameError(value: string): string {
   }
   return "";
 }
+
+/* ────────────────────────────── small parts ───────────────────────────── */
+
+type NoticeTone = "brand" | "present" | "absent";
+
+const NOTICE_TINT: Record<NoticeTone, string> = {
+  brand: "bg-[var(--brand-soft)]",
+  present: "bg-[var(--present-soft)]",
+  absent: "bg-[var(--absent-soft)]",
+};
+
+/** A tinted strip. Every word inside stays --ink, legible over all tints. */
+function Notice({
+  tone = "brand",
+  onDismiss,
+  children,
+}: {
+  tone?: NoticeTone;
+  onDismiss?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-3 rounded-2xl border border-[var(--border)] px-4 py-3",
+        NOTICE_TINT[tone],
+      )}
+    >
+      <div className="min-w-0 flex-1 text-start text-sm leading-7 text-[var(--ink)]">
+        {children}
+      </div>
+      {onDismiss !== undefined && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="shrink-0 rounded-lg px-1 py-0.5 text-xs font-semibold text-[var(--ink-3)] transition-colors duration-150 hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]"
+        >
+          إخفاء
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ErrorLine({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-[var(--border)] bg-[var(--absent-soft)] px-4 py-3 text-start text-sm font-semibold leading-7 text-[var(--ink)]">
+      {children}
+    </p>
+  );
+}
+
+/** Colour plus the word — the dot never carries "نشط" on its own. */
+function ActiveState({ active }: { active: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-2 text-sm text-[var(--ink-2)]">
+      <Dot tone={active ? "green" : "gray"} />
+      {active ? "نشط" : "موقوف"}
+    </span>
+  );
+}
+
+/* ─────────────────────────────── the page ─────────────────────────────── */
 
 export function Users() {
   const queryClient = useQueryClient();
@@ -196,11 +265,62 @@ export function Users() {
     setActive.mutate({ id: row.id, isActive: false });
   };
 
+  /** The three row actions, shared by the table and the phone cards. */
+  const rowActions = (row: User) => (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => {
+          setFormError("");
+          setForm({
+            id: row.id,
+            name: row.name ?? "",
+            username: row.username ?? "",
+            role: row.role === "OWNER" ? "OWNER" : "ASSISTANT",
+            password: "",
+          });
+        }}
+      >
+        تعديل
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => {
+          setResetError("");
+          setReset({ id: row.id, name: row.name ?? "", password: "" });
+        }}
+      >
+        إعادة تعيين كلمة المرور
+      </Button>
+      {row.isActive ? (
+        <ConfirmButton
+          size="sm"
+          confirmLabel="تأكيد الإيقاف؟"
+          disabled={setActive.isPending}
+          onConfirm={() => deactivate(row)}
+        >
+          إيقاف
+        </ConfirmButton>
+      ) : (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={setActive.isPending}
+          onClick={() => setActive.mutate({ id: row.id, isActive: true })}
+        >
+          تفعيل
+        </Button>
+      )}
+    </>
+  );
+
   if (!isOwner) {
     return (
       <div>
         <PageHeader title="المستخدمون" />
-        <Card>
+        <Card bodyClassName="p-0">
           <EmptyState
             icon={<ShieldCheck className="h-6 w-6" />}
             title="هذه الصفحة للمالك فقط"
@@ -211,171 +331,164 @@ export function Users() {
     );
   }
 
+  const newUserButton = (
+    <Button
+      onClick={() => {
+        setFormError("");
+        setForm({ ...EMPTY_FORM });
+      }}
+    >
+      مستخدم جديد
+    </Button>
+  );
+
   return (
     <div>
       <PageHeader
         title="المستخدمون"
         subtitle={`${arNum(rows.length)} حساب`}
-        actions={
-          <Button
-            onClick={() => {
-              setFormError("");
-              setForm({ ...EMPTY_FORM });
-            }}
-          >
-            مستخدم جديد
-          </Button>
-        }
+        actions={newUserButton}
       />
 
-      <div className="space-y-4">
-        <p className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-7 text-blue-900">
+      <div className="space-y-6">
+        <Notice>
           المساعد يستطيع إضافة وتعديل كل شيء — الطلاب والمجموعات والحضور والدرجات والرسائل
           والإعدادات — لكنه لا يرى سجلّ النشاط ولا صفحة المستخدمين.
-        </p>
+        </Notice>
 
         {notice ? (
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-            <span>{notice}</span>
-            <button type="button" className="text-xs underline" onClick={() => setNotice("")}>
-              إخفاء
-            </button>
-          </div>
+          <Notice tone="present" onDismiss={() => setNotice("")}>
+            {notice}
+          </Notice>
         ) : null}
 
-        {rowError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {rowError}
-          </p>
-        ) : null}
+        {rowError ? <ErrorLine>{rowError}</ErrorLine> : null}
 
         {users.isLoading ? (
           <Card>
             <LoadingBlock />
           </Card>
         ) : users.isError ? (
-          <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
-            {errorMessage(users.error)}
-          </p>
+          <ErrorLine>{errorMessage(users.error)}</ErrorLine>
         ) : rows.length === 0 ? (
           <Card bodyClassName="p-0">
             <EmptyState
               icon={<UserCog className="h-6 w-6" />}
               title="لا توجد حسابات بعد"
               hint="أنشئ حساباً للمساعد ليتمكن من تسجيل الحضور وإدخال الدرجات."
-              action={
-                <Button
-                  onClick={() => {
-                    setFormError("");
-                    setForm({ ...EMPTY_FORM });
-                  }}
-                >
-                  مستخدم جديد
-                </Button>
-              }
+              action={newUserButton}
             />
           </Card>
         ) : (
-          <Card bodyClassName="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[46rem] text-start text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3 text-start font-bold">الاسم</th>
-                    <th className="px-4 py-3 text-start font-bold">اسم المستخدم</th>
-                    <th className="px-4 py-3 text-start font-bold">الصلاحية</th>
-                    <th className="px-4 py-3 text-start font-bold">الحالة</th>
-                    <th className="px-4 py-3 text-start font-bold">آخر دخول</th>
-                    <th className="px-4 py-3 text-start font-bold">إجراءات</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {rows.map((row) => {
-                    const isSelf = row.id === currentUser?.id;
-                    return (
-                      <tr key={row.id} className="align-middle hover:bg-slate-50/60">
-                        <td className="px-4 py-3">
-                          <span className="font-bold text-slate-900">{row.name || "—"}</span>
-                          {isSelf ? (
-                            <span className="ms-2 text-xs font-semibold text-slate-400">
-                              (أنت)
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span dir="ltr" className="font-mono text-slate-600">
+          <>
+            {/* ── Phone: one card per account ──────────────────────────── */}
+            <div className="space-y-4 md:hidden">
+              {rows.map((row) => {
+                const isSelf = row.id === currentUser?.id;
+                return (
+                  <Card key={row.id}>
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-start text-base font-semibold text-[var(--ink)]">
+                            {row.name || "—"}
+                            {isSelf ? (
+                              <span className="ms-2 text-xs font-semibold text-[var(--ink-3)]">
+                                (أنت)
+                              </span>
+                            ) : null}
+                          </p>
+                          <p
+                            dir="ltr"
+                            className="mt-1 truncate text-start font-mono text-xs text-[var(--ink-3)]"
+                          >
                             {row.username || "—"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge tone={row.role === "OWNER" ? "blue" : "gray"}>
-                            {ROLE_AR[row.role] ?? row.role}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge tone={row.isActive ? "green" : "gray"}>
-                            {row.isActive ? "نشط" : "موقوف"}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {arDateTime(row.lastLoginAt)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setFormError("");
-                                setForm({
-                                  id: row.id,
-                                  name: row.name ?? "",
-                                  username: row.username ?? "",
-                                  role: row.role === "OWNER" ? "OWNER" : "ASSISTANT",
-                                  password: "",
-                                });
-                              }}
-                            >
-                              تعديل
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setResetError("");
-                                setReset({ id: row.id, name: row.name ?? "", password: "" });
-                              }}
-                            >
-                              إعادة تعيين كلمة المرور
-                            </Button>
-                            {row.isActive ? (
-                              <ConfirmButton
-                                size="sm"
-                                confirmLabel="تأكيد الإيقاف؟"
-                                disabled={setActive.isPending}
-                                onConfirm={() => deactivate(row)}
-                              >
-                                إيقاف
-                              </ConfirmButton>
-                            ) : (
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                disabled={setActive.isPending}
-                                onClick={() => setActive.mutate({ id: row.id, isActive: true })}
-                              >
-                                تفعيل
-                              </Button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          </p>
+                        </div>
+                        <Badge tone={row.role === "OWNER" ? "brand" : "gray"}>
+                          {ROLE_AR[row.role] ?? row.role}
+                        </Badge>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
+                        <ActiveState active={row.isActive} />
+                        <span className="text-xs text-[var(--ink-3)]">
+                          آخر دخول: {arDateTime(row.lastLoginAt)}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">{rowActions(row)}</div>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
-          </Card>
+
+            {/* ── Desktop: the roster as one table ─────────────────────── */}
+            <Card bodyClassName="p-0" className="hidden md:block">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[52rem] text-start text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border)]">
+                      {["الاسم", "اسم المستخدم", "الصلاحية", "الحالة", "آخر دخول", "إجراءات"].map(
+                        (heading) => (
+                          <th
+                            key={heading}
+                            className="px-5 py-3 text-start text-xs font-semibold text-[var(--ink-3)]"
+                          >
+                            {heading}
+                          </th>
+                        ),
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => {
+                      const isSelf = row.id === currentUser?.id;
+                      return (
+                        <tr
+                          key={row.id}
+                          className="border-b border-[var(--border)] align-middle transition-colors duration-150 last:border-0 hover:bg-[var(--surface-2)]"
+                        >
+                          <td className="px-5 py-3">
+                            <span className="font-semibold text-[var(--ink)]">
+                              {row.name || "—"}
+                            </span>
+                            {isSelf ? (
+                              <span className="ms-2 text-xs font-semibold text-[var(--ink-3)]">
+                                (أنت)
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="px-5 py-3">
+                            <span dir="ltr" className="block font-mono text-[var(--ink-2)]">
+                              {row.username || "—"}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3">
+                            <Badge tone={row.role === "OWNER" ? "brand" : "gray"}>
+                              {ROLE_AR[row.role] ?? row.role}
+                            </Badge>
+                          </td>
+                          <td className="px-5 py-3">
+                            <ActiveState active={row.isActive} />
+                          </td>
+                          <td className="tnum px-5 py-3 text-[var(--ink-2)]">
+                            {arDateTime(row.lastLoginAt)}
+                          </td>
+                          <td className="px-5 py-3">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {rowActions(row)}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </>
         )}
       </div>
 
@@ -436,23 +549,19 @@ export function Users() {
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
               />
             ) : (
-              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-6 text-slate-500">
+              <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2.5 text-start text-xs leading-6 text-[var(--ink-2)]">
                 كلمة المرور لا تُعرَض أبداً. لتغييرها استخدم زر «إعادة تعيين كلمة المرور» من
                 الجدول.
               </p>
             )}
 
-            <p className="text-xs leading-6 text-slate-500">
+            <p className="text-start text-xs leading-6 text-[var(--ink-3)]">
               {form.role === "OWNER"
                 ? "المالك يرى كل شيء بما في ذلك سجلّ النشاط وإدارة المستخدمين."
                 : "المساعد يعمل على كل البيانات، ولا يرى سجلّ النشاط ولا صفحة المستخدمين."}
             </p>
 
-            {formError ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
-                {formError}
-              </p>
-            ) : null}
+            {formError ? <ErrorLine>{formError}</ErrorLine> : null}
           </div>
         ) : null}
       </Modal>
@@ -475,11 +584,10 @@ export function Users() {
       >
         {reset ? (
           <div className="space-y-4">
-            <p className="flex items-center gap-2 text-sm text-slate-600">
-              <KeyRound className="h-4 w-4 text-slate-400" />
-              كلمة مرور جديدة للحساب: <span className="font-bold text-slate-900">
-                {reset.name || "—"}
-              </span>
+            <p className="flex flex-wrap items-center gap-2 text-start text-sm text-[var(--ink-2)]">
+              <KeyRound className="h-4 w-4 shrink-0 text-[var(--ink-3)]" aria-hidden />
+              كلمة مرور جديدة للحساب:{" "}
+              <span className="font-semibold text-[var(--ink)]">{reset.name || "—"}</span>
             </p>
             <Input
               label="كلمة المرور الجديدة"
@@ -489,14 +597,10 @@ export function Users() {
               value={reset.password}
               onChange={(e) => setReset({ ...reset, password: e.target.value })}
             />
-            <p className="text-xs leading-6 text-slate-500">
+            <p className="text-start text-xs leading-6 text-[var(--ink-3)]">
               اكتبها للمستخدم بنفسك — لن تظهر مرة أخرى بعد الحفظ.
             </p>
-            {resetError ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
-                {resetError}
-              </p>
-            ) : null}
+            {resetError ? <ErrorLine>{resetError}</ErrorLine> : null}
           </div>
         ) : null}
       </Modal>
